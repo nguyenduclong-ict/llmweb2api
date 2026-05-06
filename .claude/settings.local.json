@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "PowerShell(Get-ChildItem -Recurse -Path \"C:\\\\Users\\\\ADMIN\\\\Desktop\\\\Code\\\\chat2api\\\\ds2api\" -File | ForEach-Object { $_.FullName.Replace\\(\"C:\\\\Users\\\\ADMIN\\\\Desktop\\\\Code\\\\chat2api\\\\ds2api\\\\\", \"\"\\) })",
+      "PowerShell(pnpm typecheck)",
+      "PowerShell(pnpm lint)",
+      "PowerShell(pnpm lint 2>&1)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm lint *)",
+      "WebSearch",
+      "WebFetch(domain:platform.openai.com)"
+    ]
+  }
+}

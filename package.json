@@ -1,0 +1,49 @@
+{
+  "name": "llmweb2api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n backend,ui -c blue,green \"tsx watch src/index.ts\" \"cd ui && pnpm dev\"",
+    "postinstall": "node scripts/build_pow_go.js",
+    "build": "tsc && cd ui && pnpm build",
+    "start": "node dist/index.js",
+    "dev:ui": "cd ui && pnpm dev",
+    "build:ui": "cd ui && pnpm build",
+    "lint": "eslint src/",
+    "lint:ui": "cd ui && pnpm lint",
+    "lint:all": "eslint src/ && cd ui && pnpm lint",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:ui": "cd ui && pnpm format",
+    "format:all": "prettier --write \"src/**/*.ts\" && cd ui && pnpm format",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "build-pow": "node scripts/build_pow_go.js",
+    "typecheck": "tsc --noEmit",
+    "typecheck:ui": "cd ui && pnpm typecheck",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check"
+  },
+  "dependencies": {
+    "@types/sql.js": "^1.4.11",
+    "axios": "^1.16.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "keccak": "^3.0.4",
+    "sql.js": "^1.14.1",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.13.0",
+    "@types/uuid": "^10.0.0",
+    "concurrently": "^9.2.1",
+    "eslint": "^10.3.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.8.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.59.2"
+  },
+  "pnpm": {}
+}

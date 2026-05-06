@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/*.db
+.env
+*.log
+.DS_Store
+ui/dist/
+# Go WASM build outputs (built via "pnpm run build-pow")
+src/providers/deepseek/pow_go/pow.wasm
+src/providers/deepseek/pow_go/wasm_exec.js
