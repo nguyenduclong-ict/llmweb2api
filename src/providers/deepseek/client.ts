@@ -77,13 +77,18 @@ let powWasmInit: Promise<void> | null = null;
 
 async function ensurePowWasm(): Promise<boolean> {
   if (powWasmReady) return true;
-  if (!isPowWasmAvailable()) return false;
+  if (!isPowWasmAvailable()) {
+    console.log('[POW] WASM files not found, using JS fallback');
+    return false;
+  }
   if (!powWasmInit) powWasmInit = initPowWasm();
   try {
     await powWasmInit;
     powWasmReady = true;
+    console.log('[POW] WASM initialized successfully');
     return true;
-  } catch {
+  } catch (err) {
+    console.log('[POW] WASM init failed, using JS fallback:', (err as Error).message);
     return false;
   }
 }
@@ -430,6 +435,54 @@ export async function* streamCompletionLines(
   }
 }
 
+export interface EditMessagePayload {
+  chat_session_id: string;
+  message_id: number;
+  prompt: string;
+  search_enabled?: boolean;
+  thinking_enabled?: boolean;
+}
+
+export async function* streamEditMessageLines(
+  token: string,
+  powResponse: string,
+  payload: EditMessagePayload,
+): AsyncGenerator<string> {
+  const headers = {
+    ...authHeaders(token),
+    'x-ds-pow-response': powResponse,
+  };
+
+  const response = await axios.post(DEEPSEEK_URLS.editMessage, JSON.stringify(payload), {
+    headers,
+    responseType: 'stream',
+    validateStatus: () => true,
+  });
+
+  if (response.status !== 200) {
+    console.error(`[EDIT] HTTP ${response.status}: ${JSON.stringify(response.data).slice(0, 200)}`);
+    throw new Error(`DeepSeek edit_message returned HTTP ${response.status}`);
+  }
+
+  const stream = response.data as NodeJS.ReadableStream;
+  let buffer = '';
+
+  for await (const chunk of stream) {
+    buffer += chunk.toString();
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue;
+      yield line;
+    }
+  }
+
+  if (buffer.startsWith('data:')) {
+    yield buffer;
+  }
+}
+
 export async function deleteSession(token: string, sessionId: string): Promise<void> {
   await fetch(DEEPSEEK_URLS.deleteSession, {
     method: 'POST',
@@ -526,7 +579,19 @@ export async function pollFileReady(token: string, fileId: string): Promise<void
       if (files.length > 0) {
         const status = files[0].status || '';
         console.log(`[POLL] file=${fileId} attempt=${i + 1} status="${status}"`);
-        if (['processed', 'ready', 'done', 'available', 'success', 'completed', 'finished', 'uploaded'].includes(status)) {
+        if (
+          [
+            'processed',
+            'ready',
+            'done',
+            'available',
+            'success',
+            'SUCCESS',
+            'completed',
+            'finished',
+            'uploaded',
+          ].includes(status)
+        ) {
           return;
         }
       }

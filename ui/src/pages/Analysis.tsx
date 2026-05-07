@@ -1,50 +1,62 @@
-import { useEffect, useState } from 'react';
-import { apiGet } from '../api/client';
-
-interface StatsSummary {
-  totalRequests: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  avgDurationMs: number;
-}
+import { KPICards } from "../components/charts/KPICards";
+import RequestVolumeChart from "../components/charts/RequestVolumeChart";
+import StatusCodePieChart from "../components/charts/StatusCodePieChart";
+import EndpointLatencyChart from "../components/charts/EndpointLatencyChart";
+import RouteTrafficChart from "../components/charts/RouteTrafficChart";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 
 export default function Analysis() {
-  const [stats, setStats] = useState<StatsSummary | null>(null);
-
-  useEffect(() => {
-    apiGet<StatsSummary>('/api/stats').then(setStats).catch(console.error);
-  }, []);
-
-  if (!stats) return <div>Loading...</div>;
-
   return (
-    <div>
-      <div className="page-header">
-        <h1>Analysis</h1>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Analysis</h1>
+        <p className="text-muted-foreground">
+          API performance, traffic, and system health overview
+        </p>
       </div>
 
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-value">{stats.totalRequests.toLocaleString()}</div>
-          <div className="stat-label">Total Requests</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{stats.totalInputTokens.toLocaleString()}</div>
-          <div className="stat-label">Input Tokens</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{stats.totalOutputTokens.toLocaleString()}</div>
-          <div className="stat-label">Output Tokens</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{Math.round(stats.avgDurationMs)}ms</div>
-          <div className="stat-label">Avg Duration</div>
-        </div>
+      {/* KPI Cards Row */}
+      <KPICards />
+
+      {/* Row 1: Line Chart + Pie Chart */}
+      <div className="grid gap-6 lg:grid-cols-7">
+        <Card className="lg:col-span-4">
+          <CardHeader>
+            <CardTitle>Request Volume Over Time</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <RequestVolumeChart />
+          </CardContent>
+        </Card>
+        <Card className="lg:col-span-3">
+          <CardHeader>
+            <CardTitle>Status Code Distribution</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <StatusCodePieChart />
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="card">
-        <p style={{ color: '#888' }}>More detailed analytics will be available in Phase 2.</p>
-      </div>
+      {/* Row 2: Bar Chart Full Width */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Response Time by Endpoint (ms)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <EndpointLatencyChart />
+        </CardContent>
+      </Card>
+
+      {/* Row 3: Stacked Area Chart Full Width */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Traffic by Route Group</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <RouteTrafficChart />
+        </CardContent>
+      </Card>
     </div>
   );
 }

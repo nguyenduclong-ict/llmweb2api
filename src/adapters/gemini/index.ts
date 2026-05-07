@@ -1,5 +1,11 @@
 import type { Adapter } from '../../types/adapter';
-import type { InternalRequest, InternalResponse, InternalStreamChunk, InternalMessage, ContentBlock } from '../../types/common';
+import type {
+  InternalRequest,
+  InternalResponse,
+  InternalStreamChunk,
+  InternalMessage,
+  ContentBlock,
+} from '../../types/common';
 import { resolveModel } from '../../app/services/modelService';
 
 function extractGeminiContent(part: any): string {

@@ -8,9 +8,19 @@ import type {
 } from '../../types/common';
 import { resolveModel } from '../../app/services/modelService';
 
-function reasoningEffortToThinking(effort?: string): boolean | undefined {
-  if (!effort) return undefined;
-  return ['medium', 'high'].includes(effort);
+// thinking toggle priority:
+//   1. thinking: { type: "enabled" | "disabled" }  → explicit on/off
+//   2. reasoning_effort: "low" | "medium" | "high"  → thinking ON
+//   3. neither                                       → use model default (undefined)
+function resolveThinking(body: any): boolean | undefined {
+  const thinkingType = body?.thinking?.type as string | undefined;
+  if (thinkingType === 'enabled') return true;
+  if (thinkingType === 'disabled') return false;
+
+  const effort = body?.reasoning_effort as string | undefined;
+  if (effort === 'low' || effort === 'medium' || effort === 'high') return true;
+
+  return undefined;
 }
 
 function extractContent(message: any): string | ContentBlock[] {
@@ -38,7 +48,7 @@ export const openaiAdapter: Adapter = {
   parseRequest(body: any): InternalRequest {
     const vendorModel = body.model ?? 'gpt-3.5-turbo';
     const resolved = resolveModel('openai', vendorModel, {
-      thinking: reasoningEffortToThinking(body.reasoning_effort),
+      thinking: resolveThinking(body),
     });
 
     let conversationId = body.conversation_id;
@@ -62,7 +72,9 @@ export const openaiAdapter: Adapter = {
     });
 
     if (conversationId !== body.conversation_id) {
-      console.log(`[ADAPTER] Detected conversationId=${conversationId} from ${body.conversation_id ? 'body' : 'message field'}`);
+      console.log(
+        `[ADAPTER] Detected conversationId=${conversationId} from ${body.conversation_id ? 'body' : 'message field'}`,
+      );
     }
 
     console.log('[ADAPTER] tools:', body.tools ? `${body.tools.length} tools` : 'none', 'stream:', body.stream);

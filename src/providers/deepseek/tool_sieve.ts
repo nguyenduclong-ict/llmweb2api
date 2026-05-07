@@ -1,28 +1,38 @@
+import type { ParsedToolCall } from './tool_parser';
+import { parseToolCallBlock } from './tool_parser';
+
 export interface SieveEvent {
   type: 'content' | 'tool_calls';
   text?: string;
-  xml?: string;
+  toolCalls?: ParsedToolCall[];
 }
 
-const OPEN_TAG = '<tool_calls>';
+const MARKER_PREFIX = '[#llmweb2api:';
 
-// Partial tag patterns that might appear at the end of a chunk
-const PARTIAL_PATTERNS: string[] = [];
-for (let i = 1; i < OPEN_TAG.length; i++) {
-  PARTIAL_PATTERNS.push(OPEN_TAG.slice(0, i));
-}
-// Also support legacy <ds:tool_calls> format
-for (let i = 1; i < '<ds:tool_calls>'.length; i++) {
-  PARTIAL_PATTERNS.push('<ds:tool_calls>'.slice(0, i));
-}
+const START_MARKER = '[#llmweb2api:tool_call]';
+const END_MARKER = '[$llmweb2api:tool_call]';
 
-const OPEN_TAG_REGEX = /<(?:ds:tool_calls|tool_calls)>/;
-const CLOSE_TAG_REGEX = /<\/(?:ds:tool_calls|tool_calls)>/;
+// Generate partial prefixes for tool_call markers
+const ALL_MARKERS = [START_MARKER, END_MARKER];
+const PARTIALS: string[] = [];
+for (const m of ALL_MARKERS) {
+  for (let i = 1; i < m.length; i++) {
+    PARTIALS.push(m.slice(0, i));
+  }
+}
+const UNIQUE_PARTIALS = [...new Set(PARTIALS)].sort((a, b) => b.length - a.length);
+
+// ── ToolSieve ───────────────────────────────────────────────────────
+// Detects [#llmweb2api:tool_call]\n...\n[$llmweb2api:tool_call] blocks.
+// Unknown [#llmweb2api:*] blocks (model hallucination) → stripped,
+// inner content emitted as regular text.
+// Emits one tool_calls event per completed block (supports streaming
+// multiple tool calls incrementally).
 
 export class ToolSieve {
   private buffer = '';
   private capturing = false;
-  private captureStart = 0;
+  private unknownBlockEnd: string | null = null; // end marker for unknown block
 
   processChunk(text: string): SieveEvent[] {
     const events: SieveEvent[] = [];
@@ -31,11 +41,11 @@ export class ToolSieve {
     this.buffer += text;
 
     while (true) {
-      if (!this.capturing) {
-        const match = OPEN_TAG_REGEX.exec(this.buffer);
-        if (!match) {
-          // Check for partial tag at end
-          const partial = this.checkPartial();
+      if (!this.capturing && !this.unknownBlockEnd) {
+        // Look for any [#llmweb2api:* marker
+        const markerIdx = this.buffer.indexOf(MARKER_PREFIX);
+        if (markerIdx < 0) {
+          const partial = this.checkAnyPartial();
           if (partial) {
             const content = this.buffer.slice(0, -partial.length);
             this.buffer = partial;
@@ -47,36 +57,77 @@ export class ToolSieve {
           break;
         }
 
-        // Emit text before the tag
-        if (match.index > 0) {
-          events.push({ type: 'content', text: this.buffer.slice(0, match.index) });
+        // Emit text before marker
+        if (markerIdx > 0) {
+          events.push({ type: 'content', text: this.buffer.slice(0, markerIdx) });
         }
 
-        this.capturing = true;
-        this.captureStart = match.index;
-        console.log('[SIEVE] detected open tag at index', match.index, 'buffer head:', this.buffer.slice(match.index, match.index + 50));
+        // Extract block name
+        const afterPrefix = this.buffer.slice(markerIdx + MARKER_PREFIX.length);
+        const nameEnd = afterPrefix.indexOf(']');
+        if (nameEnd < 0) {
+          // Partial — keep only marker portion for next chunk
+          this.buffer = this.buffer.slice(markerIdx);
+          break;
+        }
+        const blockName = afterPrefix.slice(0, nameEnd);
+
+        if (blockName === 'tool_call') {
+          // Known: tool_call block
+          this.buffer = afterPrefix.slice(nameEnd + 1);
+          this.capturing = true;
+          continue;
+        }
+
+        // Unknown block: find corresponding end marker
+        this.unknownBlockEnd = `[$llmweb2api:${blockName}]`;
+        this.buffer = afterPrefix.slice(nameEnd + 1);
         continue;
       }
 
-      // Capturing mode: look for close tag
-      const closeMatch = CLOSE_TAG_REGEX.exec(this.buffer);
-      if (!closeMatch) {
-        // Check for partial close tag
-        const partialClose = this.checkPartialClose();
-        if (partialClose) break;
+      // Inside unknown block: find end marker, emit content without markers
+      if (this.unknownBlockEnd) {
+        const endIdx = this.buffer.indexOf(this.unknownBlockEnd);
+        if (endIdx < 0) {
+          // Check for partial end marker
+          const partial = this.checkPartialEnd(this.unknownBlockEnd);
+          if (partial) {
+            const innerContent = this.buffer.slice(0, -partial.length);
+            this.buffer = partial;
+            if (innerContent) events.push({ type: 'content', text: innerContent });
+          }
+          break;
+        }
+        // Found end marker → emit inner content, strip both markers
+        const inner = this.buffer.slice(0, endIdx);
+        this.buffer = this.buffer.slice(endIdx + this.unknownBlockEnd.length);
+        this.unknownBlockEnd = null;
+        if (inner) events.push({ type: 'content', text: inner });
+        continue;
+      }
+
+      // Capturing tool_call: find end marker
+      const endIdx = this.buffer.indexOf(END_MARKER);
+      if (endIdx < 0) {
+        const partial = this.checkEndPartial();
+        if (partial) {
+          // Keep partial in buffer, it might complete next chunk
+        }
         break;
       }
 
-      // Found close tag
-      const xmlEnd = closeMatch.index + closeMatch[0].length;
-      const xml = this.buffer.slice(this.captureStart, xmlEnd);
-      console.log('[SIEVE] tool_calls captured, xml length:', xml.length);
-
-      events.push({ type: 'tool_calls', xml });
-
-      this.buffer = this.buffer.slice(xmlEnd);
+      const body = this.buffer.slice(0, endIdx);
+      this.buffer = this.buffer.slice(endIdx + END_MARKER.length);
       this.capturing = false;
-      this.captureStart = 0;
+
+      const toolCalls = parseToolCallBlock(body);
+      if (toolCalls.length > 0) {
+        events.push({ type: 'tool_calls', toolCalls });
+      } else if (body.trim()) {
+        console.error('[TOOL_SIEVE] Captured tool_call block but failed to parse.');
+        console.error('[TOOL_SIEVE] Body:', body);
+      }
+      continue;
     }
 
     return events;
@@ -86,23 +137,30 @@ export class ToolSieve {
     const events: SieveEvent[] = [];
 
     if (this.capturing) {
-      console.log('[SIEVE] flush while capturing, buffer head:', this.buffer.slice(0, 100));
-      const closeMatch = CLOSE_TAG_REGEX.exec(this.buffer);
-      if (closeMatch) {
-        const xmlEnd = closeMatch.index + closeMatch[0].length;
-        const xml = this.buffer.slice(this.captureStart, xmlEnd);
-        console.log('[SIEVE] flush found close tag, emitting tool_calls');
-        events.push({ type: 'tool_calls', xml });
-        this.buffer = this.buffer.slice(xmlEnd);
+      let body = this.buffer;
+      const partial = this.checkEndPartial();
+      if (partial) {
+        body = body.slice(0, -partial.length);
+      }
+
+      const toolCalls = parseToolCallBlock(body);
+      if (toolCalls.length > 0) {
+        events.push({ type: 'tool_calls', toolCalls });
       } else {
+        if (body.trim()) {
+          console.error('[TOOL_SIEVE] Flush: unclosed tool_call block failed to parse.');
+          console.error('[TOOL_SIEVE] Body:', body);
+        }
         if (this.buffer) {
-          console.log('[SIEVE] flush no close tag, emitting as content');
-          events.push({ type: 'content', text: this.buffer });
+          events.push({ type: 'content', text: START_MARKER + this.buffer });
         }
       }
       this.capturing = false;
+    } else if (this.unknownBlockEnd) {
+      // Unknown block didn't close → emit with markers as-is
+      events.push({ type: 'content', text: `${MARKER_PREFIX}${this.unknownBlockEnd.slice('[$llmweb2api:'.length, -1)}]${this.buffer}` });
+      this.unknownBlockEnd = null;
     } else if (this.buffer) {
-      console.log('[SIEVE] flush normal, buffer head:', this.buffer.slice(0, 100));
       events.push({ type: 'content', text: this.buffer });
     }
 
@@ -110,24 +168,28 @@ export class ToolSieve {
     return events;
   }
 
-  private checkPartial(): string | null {
-    for (let i = PARTIAL_PATTERNS.length - 1; i >= 0; i--) {
-      const p = PARTIAL_PATTERNS[i];
-      if (this.buffer.endsWith(p)) {
-        return p;
-      }
+  // Check if buffer ends with a partial of ANY [#llmweb2api: prefix
+  private checkAnyPartial(): string | null {
+    for (let i = 1; i <= MARKER_PREFIX.length; i++) {
+      const p = MARKER_PREFIX.slice(0, i);
+      if (this.buffer.endsWith(p)) return p;
+    }
+    // Also check tool_call partials (for compatibility)
+    for (const p of UNIQUE_PARTIALS) {
+      if (this.buffer.endsWith(p)) return p;
     }
     return null;
   }
 
-  private checkPartialClose(): boolean {
-    // Check partial close tags: </ds:tool_calls> and </tool_calls>
-    const tags = ['</ds:tool_calls>', '</tool_calls>'];
-    for (const tag of tags) {
-      for (let i = 1; i < tag.length; i++) {
-        if (this.buffer.endsWith(tag.slice(0, i))) return true;
-      }
+  private checkPartialEnd(marker: string): string | null {
+    for (let i = 1; i < marker.length; i++) {
+      const p = marker.slice(0, i);
+      if (this.buffer.endsWith(p)) return p;
     }
-    return false;
+    return null;
+  }
+
+  private checkEndPartial(): string | null {
+    return this.checkPartialEnd(END_MARKER);
   }
 }

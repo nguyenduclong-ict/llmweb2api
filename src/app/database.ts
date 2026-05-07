@@ -1,94 +1,61 @@
-import initSqlJs from 'sql.js';
-import type { Database as SqlJsDatabase, Statement } from 'sql.js';
+import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
-let db: SqlJsDatabase;
+type DB = InstanceType<typeof Database>;
+
+let db: DB;
 let dbPath: string;
 
 const LATEST_SCHEMA_VERSION = 3;
 
-export async function initDatabase(customPath?: string): Promise<SqlJsDatabase> {
+export async function initDatabase(customPath?: string): Promise<DB> {
   dbPath = path.resolve(customPath || process.env.DB_PATH || './data/app.db');
   const dir = path.dirname(dbPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  const SQL = await initSqlJs();
-
-  if (fs.existsSync(dbPath)) {
-    const buffer = fs.readFileSync(dbPath);
-    db = new SQL.Database(buffer);
-  } else {
-    db = new SQL.Database();
-  }
-
-  db.run('PRAGMA foreign_keys = ON');
+  db = new Database(dbPath);
+  db.pragma('foreign_keys = ON');
   runMigrations();
   seedDefaultMappings();
-  save();
   return db;
 }
 
-export function getDatabase(): SqlJsDatabase {
+export function getDatabase(): DB {
   if (!db) throw new Error('Database not initialized. Call initDatabase() first.');
   return db;
 }
 
-export function save(): void {
-  if (!db) return;
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(dbPath, buffer);
+export function prepareAndRun(sql: string, params?: unknown[]): void {
+  db.prepare(sql).run(...(params || []));
 }
 
-export function prepareAndRun(sql: string, params?: any[]): void {
-  db.run(sql, params);
-  save();
+export function prepareAndGet<T = Record<string, unknown>>(sql: string, params?: unknown[]): T | undefined {
+  return db.prepare(sql).get(...(params || [])) as T | undefined;
 }
 
-export function prepareAndGet<T = Record<string, unknown>>(sql: string, params?: any[]): T | undefined {
-  const stmt: Statement = db.prepare(sql);
-  if (params) stmt.bind(params);
-  if (stmt.step()) {
-    const row = stmt.getAsObject() as unknown as T;
-    stmt.free();
-    return row;
-  }
-  stmt.free();
-  return undefined;
-}
-
-export function prepareAndAll<T = Record<string, unknown>>(sql: string, params?: any[]): T[] {
-  const results: T[] = [];
-  const stmt: Statement = db.prepare(sql);
-  if (params) stmt.bind(params);
-  while (stmt.step()) {
-    results.push(stmt.getAsObject() as unknown as T);
-  }
-  stmt.free();
-  return results;
+export function prepareAndAll<T = Record<string, unknown>>(sql: string, params?: unknown[]): T[] {
+  return db.prepare(sql).all(...(params || [])) as T[];
 }
 
 function getSchemaVersion(): number {
-  db.run(`
+  db.prepare(
+    `
     CREATE TABLE IF NOT EXISTS schema_version (
       version INTEGER NOT NULL DEFAULT 0
     )
-  `);
+  `,
+  ).run();
 
-  const stmt = db.prepare('SELECT COALESCE(MAX(version), 0) AS version FROM schema_version');
-  let version = 0;
-  if (stmt.step()) {
-    version = (stmt.getAsObject() as { version: number }).version;
-  }
-  stmt.free();
-
-  return version;
+  const row = db.prepare('SELECT COALESCE(MAX(version), 0) AS version FROM schema_version').get() as {
+    version: number;
+  };
+  return row.version;
 }
 
 function setSchemaVersion(version: number): void {
-  db.run('DELETE FROM schema_version');
-  db.run('INSERT INTO schema_version (version) VALUES (?)', [version]);
+  db.prepare('DELETE FROM schema_version').run();
+  db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(version);
 }
 
 interface Migration {
@@ -102,7 +69,8 @@ const migrations: Migration[] = [
     version: 1,
     name: 'Initial schema',
     run: () => {
-      db.run(`
+      db.prepare(
+        `
         CREATE TABLE IF NOT EXISTS accounts (
           id          INTEGER PRIMARY KEY AUTOINCREMENT,
           name        TEXT NOT NULL,
@@ -110,23 +78,27 @@ const migrations: Migration[] = [
           settings    TEXT NOT NULL DEFAULT '{}',
           session     TEXT NOT NULL DEFAULT '{}',
           enabled     INTEGER NOT NULL DEFAULT 1,
-          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+          updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
           UNIQUE(provider, name)
         )
-      `);
-      db.run(`
+      `,
+      ).run();
+      db.prepare(
+        `
         CREATE TABLE IF NOT EXISTS api_keys (
           id          INTEGER PRIMARY KEY AUTOINCREMENT,
           key         TEXT NOT NULL UNIQUE,
           name        TEXT NOT NULL,
           cache       INTEGER NOT NULL DEFAULT 0,
           enabled     INTEGER NOT NULL DEFAULT 1,
-          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+          created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+          updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
         )
-      `);
-      db.run(`
+      `,
+      ).run();
+      db.prepare(
+        `
         CREATE TABLE IF NOT EXISTS request_logs (
           id          TEXT PRIMARY KEY,
           api_key_id  INTEGER REFERENCES api_keys(id),
@@ -140,31 +112,36 @@ const migrations: Migration[] = [
           request_data TEXT,
           response_data TEXT,
           duration_ms INTEGER,
-          created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+          created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
         )
-      `);
-      db.run(`
+      `,
+      ).run();
+      db.prepare(
+        `
         CREATE TABLE IF NOT EXISTS settings (
           key   TEXT PRIMARY KEY,
           value TEXT NOT NULL
         )
-      `);
+      `,
+      ).run();
     },
   },
   {
     version: 2,
     name: 'Add conversations table',
     run: () => {
-      db.run(`
+      db.prepare(
+        `
         CREATE TABLE IF NOT EXISTS conversations (
           conversation_id TEXT PRIMARY KEY,
           account_id     INTEGER REFERENCES accounts(id),
           provider       TEXT NOT NULL,
           messages       TEXT NOT NULL DEFAULT '[]',
-          created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+          created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+          updated_at     TEXT NOT NULL DEFAULT (datetime('now','localtime'))
         )
-      `);
+      `,
+      ).run();
     },
   },
   {
@@ -175,22 +152,23 @@ const migrations: Migration[] = [
       const hasAccounts = checkTableExists('accounts');
 
       if (hasProviderItems && !hasAccounts) {
-        db.run('ALTER TABLE provider_items RENAME TO accounts');
+        db.prepare('ALTER TABLE provider_items RENAME TO accounts').run();
       } else if (hasProviderItems && hasAccounts) {
-        db.run(
+        db.prepare(
           'INSERT INTO accounts (name, provider, settings, enabled, created_at, updated_at) SELECT name, provider, settings, enabled, created_at, updated_at FROM provider_items',
-        );
-        db.run('DROP TABLE provider_items');
+        ).run();
+        db.prepare('DROP TABLE provider_items').run();
       }
 
       const accCols = getTableColumns('accounts');
       if (!accCols.includes('session')) {
-        db.run("ALTER TABLE accounts ADD COLUMN session TEXT NOT NULL DEFAULT '{}'");
+        db.prepare("ALTER TABLE accounts ADD COLUMN session TEXT NOT NULL DEFAULT '{}'").run();
       }
 
       const logCols = getTableColumns('request_logs');
       if (logCols.includes('provider_item_id')) {
-        db.run(`
+        db.prepare(
+          `
           CREATE TABLE request_logs_new (
             id          TEXT PRIMARY KEY,
             api_key_id  INTEGER REFERENCES api_keys(id),
@@ -204,39 +182,46 @@ const migrations: Migration[] = [
             request_data TEXT,
             response_data TEXT,
             duration_ms INTEGER,
-            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
           )
-        `);
-        db.run(`
+        `,
+        ).run();
+        db.prepare(
+          `
           INSERT INTO request_logs_new SELECT
             id, api_key_id, provider_item_id AS account_id,
             endpoint, method, status, stream,
             input_tokens, output_tokens, request_data, response_data, duration_ms, created_at
           FROM request_logs
-        `);
-        db.run('DROP TABLE request_logs');
-        db.run('ALTER TABLE request_logs_new RENAME TO request_logs');
+        `,
+        ).run();
+        db.prepare('DROP TABLE request_logs').run();
+        db.prepare('ALTER TABLE request_logs_new RENAME TO request_logs').run();
       }
 
       const convCols = getTableColumns('conversations');
       if (!convCols.includes('account_id')) {
-        db.run(`
+        db.prepare(
+          `
           CREATE TABLE conversations_new (
             conversation_id TEXT PRIMARY KEY,
             account_id     INTEGER REFERENCES accounts(id),
             provider       TEXT NOT NULL,
             messages       TEXT NOT NULL DEFAULT '[]',
-            created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+            updated_at     TEXT NOT NULL DEFAULT (datetime('now','localtime'))
           )
-        `);
-        db.run(`
+        `,
+        ).run();
+        db.prepare(
+          `
           INSERT INTO conversations_new SELECT
             conversation_id, NULL AS account_id, provider, messages, created_at, updated_at
           FROM conversations
-        `);
-        db.run('DROP TABLE conversations');
-        db.run('ALTER TABLE conversations_new RENAME TO conversations');
+        `,
+        ).run();
+        db.prepare('DROP TABLE conversations').run();
+        db.prepare('ALTER TABLE conversations_new RENAME TO conversations').run();
       }
     },
   },
@@ -272,21 +257,13 @@ function dumpTables(): void {
 }
 
 function checkTableExists(tableName: string): boolean {
-  const stmt = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?");
-  stmt.bind([tableName]);
-  const exists = stmt.step();
-  stmt.free();
-  return exists;
+  const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(tableName);
+  return !!row;
 }
 
 function getTableColumns(tableName: string): string[] {
-  const stmt = db.prepare(`PRAGMA table_info(${tableName})`);
-  const cols: string[] = [];
-  while (stmt.step()) {
-    cols.push(stmt.getAsObject().name as string);
-  }
-  stmt.free();
-  return cols;
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return rows.map((r) => r.name);
 }
 
 function seedDefaultMappings(): void {
@@ -318,18 +295,15 @@ function seedDefaultMappings(): void {
   };
 
   for (const [key, value] of Object.entries(defaults)) {
-    const exists = db.prepare('SELECT value FROM settings WHERE key = ?');
-    exists.bind([key]);
-    if (!exists.step()) {
-      db.run('INSERT INTO settings (key, value) VALUES (?, ?)', [key, value]);
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    if (!row) {
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(key, value);
     }
-    exists.free();
   }
 }
 
 export function closeDatabase(): void {
   if (db) {
-    save();
     db.close();
   }
 }

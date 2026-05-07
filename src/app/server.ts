@@ -10,32 +10,35 @@ import { deleteOldLogs } from './models/log';
 import { getSetting } from './services/settingsService';
 
 function startCleanupTimer(): void {
-  setInterval(() => {
-    try {
-      const retention = getSetting('conversation_retention', '');
-      if (retention === 'immediate') {
-        const deleted = pruneOldConversations(0);
-        if (deleted > 0) console.log(`[cleanup] Pruned ${deleted} conversations (immediate)`);
-      } else if (retention === '1h') {
-        const deleted = pruneOldConversations(1);
-        if (deleted > 0) console.log(`[cleanup] Pruned ${deleted} conversations (1h)`);
-      } else if (retention === '24h') {
-        const deleted = pruneOldConversations(24);
-        if (deleted > 0) console.log(`[cleanup] Pruned ${deleted} conversations (24h)`);
-      }
-
-      const logRetention = getSetting('log_retention_days', '');
-      if (logRetention) {
-        const days = parseInt(logRetention, 10);
-        if (days > 0) {
-          const deleted = deleteOldLogs(days);
-          if (deleted > 0) console.log(`[cleanup] Deleted ${deleted} old logs (>${days} days)`);
+  setInterval(
+    () => {
+      try {
+        const retention = getSetting('conversation_retention', '');
+        if (retention === 'immediate') {
+          const deleted = pruneOldConversations(0);
+          if (deleted > 0) console.log(`[cleanup] Pruned ${deleted} conversations (immediate)`);
+        } else if (retention === '1h') {
+          const deleted = pruneOldConversations(1);
+          if (deleted > 0) console.log(`[cleanup] Pruned ${deleted} conversations (1h)`);
+        } else if (retention === '24h') {
+          const deleted = pruneOldConversations(24);
+          if (deleted > 0) console.log(`[cleanup] Pruned ${deleted} conversations (24h)`);
         }
+
+        const logRetention = getSetting('log_retention_days', '');
+        if (logRetention) {
+          const days = parseInt(logRetention, 10);
+          if (days > 0) {
+            const deleted = deleteOldLogs(days);
+            if (deleted > 0) console.log(`[cleanup] Deleted ${deleted} old logs (>${days} days)`);
+          }
+        }
+      } catch (err) {
+        console.error('[cleanup] Error:', (err as Error).message);
       }
-    } catch (err) {
-      console.error('[cleanup] Error:', (err as Error).message);
-    }
-  }, 5 * 60 * 1000);
+    },
+    5 * 60 * 1000,
+  );
 }
 
 export function createServer(): express.Application {
@@ -55,7 +58,7 @@ export function createServer(): express.Application {
 
   startCleanupTimer();
 
-  const uiDistPath = path.resolve(__dirname, '..', 'ui', 'dist');
+  const uiDistPath = path.resolve(__dirname, '..', 'ui');
   const indexPath = path.join(uiDistPath, 'index.html');
 
   if (fs.existsSync(indexPath)) {

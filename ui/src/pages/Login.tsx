@@ -1,60 +1,81 @@
-import { useState } from 'react';
-import './Login.css';
+import { useState } from "react";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import { Zap, Loader2 } from "lucide-react";
 
 interface LoginProps {
-  onLogin: () => void;
+  onLogin: (password: string) => void;
 }
 
 export default function Login({ onLogin }: LoginProps) {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    if (!password.trim()) {
+      setError("Password is required");
+      return;
+    }
+    setError("");
     setLoading(true);
-
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
       });
-
       if (!res.ok) {
-        setError('Invalid password');
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Invalid password");
         return;
       }
-
-      localStorage.setItem('dashboard_password', password);
-      onLogin();
+      onLogin(password);
     } catch {
-      setError('Connection error');
+      setError("Network error. Please try again.");
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   return (
-    <div className="login-container">
-      <form className="login-form" onSubmit={handleSubmit}>
-        <h1>llmweb2api</h1>
-        <p className="login-subtitle">Dashboard Login</p>
-        <div className="form-group">
-          <input
-            type="password"
-            placeholder="Enter dashboard password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoFocus
-          />
-        </div>
-        {error && <p className="login-error">{error}</p>}
-        <button className="btn btn-primary login-btn" type="submit" disabled={loading || !password}>
-          {loading ? 'Checking...' : 'Login'}
-        </button>
-      </form>
+    <div className="flex min-h-screen items-center justify-center bg-muted/30">
+      <Card className="w-full max-w-md">
+        <CardHeader className="space-y-2 text-center">
+          <div className="flex justify-center">
+            <div className="rounded-full bg-primary/10 p-3">
+              <Zap className="h-8 w-8 text-primary" />
+            </div>
+          </div>
+          <CardTitle className="text-2xl">llmweb2api</CardTitle>
+          <CardDescription>Enter your password to access the dashboard</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setError("");
+                }}
+                placeholder="Enter dashboard password"
+                autoFocus
+              />
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </div>
+            <Button type="submit" className="w-full">
+              Login
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

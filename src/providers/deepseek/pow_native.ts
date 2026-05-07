@@ -37,6 +37,7 @@ export async function initPowWasm(): Promise<void> {
     }
 
     // Load Go's WASM executor (sets globalThis.Go)
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     require(wasmExecPath);
 
     const go = new (globalThis as any).Go();
@@ -67,12 +68,7 @@ export async function initPowWasm(): Promise<void> {
  * Giải PoW challenge, trả về answer (nonce).
  * Hàm này chạy đồng bộ sau khi WASM đã được khởi tạo.
  */
-export function solvePow(
-  challengeHex: string,
-  salt: string,
-  expireAt: number,
-  difficulty: number,
-): number {
+export function solvePow(challengeHex: string, salt: string, expireAt: number, difficulty: number): number {
   const fn = (globalThis as any).__powSolvePow;
   if (!fn) throw new Error('__powSolvePow not registered, call initPowWasm() first');
 
@@ -117,7 +113,6 @@ export function buildPowHeader(
 export function isPowWasmAvailable(): boolean {
   const powDir = __dirname;
   return (
-    fs.existsSync(path.join(powDir, 'pow_go', 'pow.wasm')) &&
-    fs.existsSync(path.join(powDir, 'pow_go', 'wasm_exec.js'))
+    fs.existsSync(path.join(powDir, 'pow_go', 'pow.wasm')) && fs.existsSync(path.join(powDir, 'pow_go', 'wasm_exec.js'))
   );
 }

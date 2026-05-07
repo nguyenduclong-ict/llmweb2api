@@ -81,11 +81,13 @@ export const DEEPSEEK_URLS = {
   deleteSession: `https://${DEEPSEEK_HOST}/api/v0/chat_session/delete`,
   uploadFile: `https://${DEEPSEEK_HOST}/api/v0/file/upload_file`,
   fetchFiles: `https://${DEEPSEEK_HOST}/api/v0/file/fetch_files`,
+  editMessage: `https://${DEEPSEEK_HOST}/api/v0/chat/edit_message`,
   completionTarget: '/api/v0/chat/completion',
+  editMessageTarget: '/api/v0/chat/edit_message',
   uploadTarget: '/api/v0/file/upload_file',
 };
 
-export const FILE_UPLOAD_THRESHOLD = 200 * 1024;
+export const FILE_UPLOAD_THRESHOLD = 100 * 1024;
 export const MAX_FILE_SIZE = 10 * 1024 * 1024;
 export const MAX_FILES = 50;
 

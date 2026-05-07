@@ -65,9 +65,17 @@ export function resolveModel(
   let providerModel = map[vendorModel];
 
   if (!providerModel) {
+    // Try case-insensitive match in model map
     const lowerModel = vendorModel.toLowerCase();
     const matchKey = Object.keys(map).find((k) => k.toLowerCase() === lowerModel);
-    providerModel = matchKey ? map[matchKey] : 'deepseek-v4-flash';
+    if (matchKey) {
+      providerModel = map[matchKey];
+    } else if (getProviderModelMeta(vendorModel)) {
+      // vendorModel is already a valid provider model (e.g. "deepseek-v4-pro")
+      providerModel = vendorModel;
+    } else {
+      providerModel = 'deepseek-v4-flash';
+    }
   }
 
   const meta: ProviderModelMeta = getProviderModelMeta(providerModel) ?? {
@@ -76,9 +84,9 @@ export function resolveModel(
     modelType: 'default',
   };
 
-  let thinking = meta.thinking === 'on';
-  if (meta.thinking === 'toggleable' && options?.thinking !== undefined) {
-    thinking = options.thinking;
+  let thinking = meta.thinking === 'on' || meta.thinking === 'toggleable';
+  if (meta.thinking === 'toggleable' && options?.thinking === false) {
+    thinking = false;
   }
 
   return {

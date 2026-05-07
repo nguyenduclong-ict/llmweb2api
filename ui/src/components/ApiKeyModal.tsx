@@ -1,0 +1,114 @@
+import { useEffect, useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "./ui/dialog";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { Switch } from "./ui/switch";
+
+interface ApiKey {
+  id: number;
+  key: string;
+  name: string;
+  cache: number;
+  enabled: number;
+  created_at: string;
+}
+
+interface ApiKeyModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  editingKey: ApiKey | null;
+  onSave: (data: any) => Promise<ApiKey | void>;
+  onKeyGenerated?: (key: string) => void;
+}
+
+export function ApiKeyModal({ open, onOpenChange, editingKey, onSave, onKeyGenerated }: ApiKeyModalProps) {
+  const [name, setName] = useState("");
+  const [key, setKey] = useState("");
+  const [cache, setCache] = useState(false);
+
+  const resetForm = () => {
+    setName("");
+    setKey("");
+    setCache(false);
+  };
+
+  useEffect(() => {
+    if (editingKey) {
+      setName(editingKey.name);
+      setCache(!!editingKey.cache);
+    } else if (open) {
+      resetForm();
+    }
+  }, [editingKey, open]);
+
+  const generateKey = () => {
+    const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let newKey = "sk-";
+    for (let i = 0; i < 48; i++) newKey += chars[Math.floor(Math.random() * chars.length)];
+    setKey(newKey);
+  };
+
+  const handleSave = async () => {
+    if (!name.trim()) return;
+    const result = await onSave(editingKey ? { name: name.trim(), cache } : { name: name.trim(), key: key || undefined, cache });
+    if (!editingKey && result && "key" in result && onKeyGenerated) {
+      onKeyGenerated(result.key);
+    }
+    onOpenChange(false);
+    resetForm();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[500px]">
+        <DialogHeader>
+          <DialogTitle>{editingKey ? "Edit API Key" : "Create New API Key"}</DialogTitle>
+          <DialogDescription>
+            {editingKey ? "Update API key details below." : "Create a new API key for authentication."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-4">
+          <div className="grid gap-2">
+            <Label htmlFor="name">Name</Label>
+            <Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. My App" />
+          </div>
+          {!editingKey && (
+            <div className="grid gap-2">
+              <Label htmlFor="key">Key</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="key"
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  placeholder="Leave empty to auto-generate"
+                  className="font-mono text-sm"
+                />
+                <Button type="button" variant="outline" onClick={generateKey}>
+                  Generate
+                </Button>
+              </div>
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <Label htmlFor="cache">Enable cache</Label>
+            <Switch id="cache" checked={cache} onCheckedChange={setCache} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave}>{editingKey ? "Update" : "Create"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

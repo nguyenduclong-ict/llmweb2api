@@ -27,7 +27,7 @@ export default function App() {
   const [authed, setAuthed] = useState(() => !!localStorage.getItem('dashboard_password'));
 
   if (!authed) {
-    return <Login onLogin={() => setAuthed(true)} />;
+    return <Login onLogin={(password) => { localStorage.setItem('dashboard_password', password); setAuthed(true); }} />;
   }
 
   return <ProtectedRoutes />;

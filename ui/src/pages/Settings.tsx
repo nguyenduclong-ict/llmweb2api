@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react';
 import { apiGet, apiPut } from '../api/client';
+import { Button } from '../components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { Save, Download, Plus, Trash2, RotateCcw } from 'lucide-react';
 
 interface AppSettings {
   dashboardPassword: string;
@@ -17,20 +25,9 @@ interface ModelMapsData {
   defaults: Record<string, Record<string, string>>;
 }
 
-const ADAPTERS = [
-  { key: 'openai', label: 'OpenAI' },
-  { key: 'anthropic', label: 'Anthropic' },
-  { key: 'gemini', label: 'Gemini' },
-] as const;
+const ADAPTERS = [{ key: 'openai', label: 'OpenAI' }] as const;
 
 export default function Settings() {
-  const [, setSettings] = useState<AppSettings>({
-    dashboardPassword: '',
-    logRetentionDays: '30',
-    conversationRetention: '',
-    modelMaps: {},
-    availableProviderModels: [],
-  });
   const [password, setPassword] = useState('');
   const [retentionDays, setRetentionDays] = useState('30');
   const [conversationRetention, setConversationRetention] = useState('');
@@ -43,12 +40,11 @@ export default function Settings() {
     availableProviderModels: [],
     defaults: {},
   });
-  const [activeTab, setActiveTab] = useState<'openai' | 'anthropic' | 'gemini'>('openai');
+  const [activeTab, setActiveTab] = useState<'openai'>('openai');
 
   useEffect(() => {
     apiGet<AppSettings>('/api/settings')
       .then((data) => {
-        setSettings(data);
         setRetentionDays(data.logRetentionDays);
         setConversationRetention(data.conversationRetention || '');
       })
@@ -101,6 +97,7 @@ export default function Settings() {
   }
 
   function handleAddMapping(adapter: string) {
+    // eslint-disable-next-line react-hooks/purity
     const newKey = `new-model-${Date.now()}`;
     const defaultProvider = modelMaps.availableProviderModels[0] || 'deepseek-v4-flash';
     setModelMaps((prev) => ({
@@ -128,171 +125,218 @@ export default function Settings() {
   }
 
   return (
-    <div>
-      <div className="page-header">
-        <h1>Settings</h1>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+        <p className="text-muted-foreground">Configure application settings</p>
       </div>
 
-      <div className="card">
-        <h3>Dashboard Password</h3>
-        <div className="form-group">
-          <label>New Password (leave empty to keep current)</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Enter new password"
-          />
-        </div>
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Dashboard Security</CardTitle>
+            <CardDescription>Update your dashboard access password</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="password">New Password (leave empty to keep current)</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter new password"
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Log Management</CardTitle>
+            <CardDescription>Configure log retention and cleanup</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="retention">Maximum log retention (days)</Label>
+                <Input
+                  id="retention"
+                  type="number"
+                  value={retentionDays}
+                  onChange={(e) => setRetentionDays(e.target.value)}
+                  min="1"
+                  max="365"
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Conversation Cleanup</CardTitle>
+            <CardDescription>Auto-delete conversations after specified time</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2">
+              <Label htmlFor="conversation">Auto-delete conversations after</Label>
+              <Select value={conversationRetention} onValueChange={setConversationRetention}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Never" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="never">Never</SelectItem>
+                  <SelectItem value="immediate">Immediately (ignored if cache is enabled)</SelectItem>
+                  <SelectItem value="1h">1 Hour</SelectItem>
+                  <SelectItem value="24h">24 Hours (1 Day)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Model Mapping</CardTitle>
+            <CardDescription>
+              Map vendor models to provider models. Provider models definition: <strong>search always ON</strong>.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <span className="text-sm text-muted-foreground">Available provider models:</span>
+              {modelMaps.availableProviderModels.map((m) => (
+                <code key={m} className="rounded bg-muted px-2 py-1 text-xs">
+                  {m}
+                </code>
+              ))}
+            </div>
+
+            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
+              <TabsList>
+                {ADAPTERS.map((a) => (
+                  <TabsTrigger key={a.key} value={a.key}>
+                    {a.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              {ADAPTERS.map((a) => (
+                <TabsContent key={a.key} value={a.key} className="space-y-4">
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[42%]">Vendor Model</TableHead>
+                          <TableHead className="w-[42%]">Provider Model</TableHead>
+                          <TableHead className="w-[16%]">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {Object.entries((modelMaps as any)[a.key] as Record<string, string>).map(
+                          ([vendorModel, providerModel]) => (
+                            <TableRow key={vendorModel}>
+                              <TableCell>
+                                <Input
+                                  value={vendorModel}
+                                  onChange={(e) => {
+                                    const newVendor = e.target.value;
+                                    setModelMaps((prev) => {
+                                      const copy: Record<string, string> = {};
+                                      for (const [k, v] of Object.entries(
+                                        (prev as any)[a.key] as Record<string, string>,
+                                      )) {
+                                        copy[k === vendorModel ? newVendor : k] = v;
+                                      }
+                                      return { ...prev, [a.key]: copy };
+                                    });
+                                  }}
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <Select
+                                  value={providerModel}
+                                  onValueChange={(v) => handleMapChange(a.key, vendorModel, v)}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {modelMaps.availableProviderModels.map((m) => (
+                                      <SelectItem key={m} value={m}>
+                                        {m}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </TableCell>
+                              <TableCell>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleRemoveMapping(a.key, vendorModel)}
+                                >
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ),
+                        )}
+                        {Object.keys((modelMaps as any)[a.key] || {}).length === 0 && (
+                          <TableRow>
+                            <TableCell colSpan={3} className="text-center text-muted-foreground">
+                              No mappings yet
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => handleAddMapping(a.key)}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Mapping
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => handleResetMaps(a.key)}>
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      Reset to Default
+                    </Button>
+                    <Button size="sm" onClick={() => handleSaveModelMaps(a.key)}>
+                      <Save className="mr-2 h-4 w-4" />
+                      Save Mappings
+                    </Button>
+                  </div>
+                </TabsContent>
+              ))}
+            </Tabs>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Configuration</CardTitle>
+            <CardDescription>Export or import configuration</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={handleExport}>
+                <Download className="mr-2 h-4 w-4" />
+                Export Config
+              </Button>
+              <span className="text-sm text-muted-foreground">Import coming in Phase 2</span>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="card">
-        <h3>Log Retention</h3>
-        <div className="form-group">
-          <label>Maximum log retention (days)</label>
-          <input
-            type="number"
-            value={retentionDays}
-            onChange={(e) => setRetentionDays(e.target.value)}
-            min="1"
-            max="365"
-          />
-        </div>
-      </div>
-
-      <div className="card">
-        <h3>Conversation Cleanup</h3>
-        <div className="form-group">
-          <label>Auto-delete conversations after</label>
-          <select
-            value={conversationRetention}
-            onChange={(e) => setConversationRetention(e.target.value)}
-          >
-            <option value="">Never</option>
-            <option value="immediate">Immediately (ignored if cache is enabled)</option>
-            <option value="1h">1 Hour</option>
-            <option value="24h">24 Hours (1 Day)</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginBottom: 16 }}>Model Mapping</h3>
-        <p style={{ fontSize: '12px', color: '#888', marginBottom: 12 }}>
-          Map vendor models to provider models. Provider models definition: <strong>search always ON</strong>.
-        </p>
-
-        <div style={{ display: 'flex', gap: 0, marginBottom: 16, borderBottom: '2px solid #eee' }}>
-          {ADAPTERS.map((a) => (
-            <button
-              key={a.key}
-              className="btn"
-              style={{
-                background: activeTab === a.key ? '#00d4aa' : 'transparent',
-                color: activeTab === a.key ? '#1a1a2e' : '#666',
-                borderRadius: '6px 6px 0 0',
-                fontWeight: activeTab === a.key ? 600 : 400,
-                border: 'none',
-                padding: '8px 16px',
-              }}
-              onClick={() => setActiveTab(a.key)}
-            >
-              {a.label}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ marginBottom: 16, display: 'flex', gap: 8 }}>
-          <span style={{ fontSize: '13px', color: '#666' }}>Available provider models:</span>
-          {modelMaps.availableProviderModels.map((m) => (
-            <code key={m} style={{ background: '#e6f9f2', padding: '2px 6px', borderRadius: 4, fontSize: '12px' }}>
-              {m}
-            </code>
-          ))}
-        </div>
-
-        <table>
-          <thead>
-            <tr>
-              <th style={{ width: '42%' }}>Vendor Model</th>
-              <th style={{ width: '42%' }}>Provider Model</th>
-              <th style={{ width: '16%' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries((modelMaps as any)[activeTab] as Record<string, string>).map(
-              ([vendorModel, providerModel]) => (
-                <tr key={vendorModel}>
-                  <td>
-                    <input
-                      value={vendorModel}
-                      style={{ width: '100%' }}
-                      onChange={(e) => {
-                        const newVendor = e.target.value;
-                        setModelMaps((prev) => {
-                          const copy: Record<string, string> = {};
-                          for (const [k, v] of Object.entries((prev as any)[activeTab] as Record<string, string>)) {
-                            copy[k === vendorModel ? newVendor : k] = v;
-                          }
-                          return { ...prev, [activeTab]: copy };
-                        });
-                      }}
-                    />
-                  </td>
-                  <td>
-                    <select
-                      value={providerModel}
-                      style={{ width: '100%' }}
-                      onChange={(e) => handleMapChange(activeTab, vendorModel, e.target.value)}
-                    >
-                      {modelMaps.availableProviderModels.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <button
-                      className="btn btn-danger"
-                      style={{ fontSize: '11px', padding: '4px 8px' }}
-                      onClick={() => handleRemoveMapping(activeTab, vendorModel)}
-                    >
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ),
-            )}
-          </tbody>
-        </table>
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-          <button className="btn btn-secondary" onClick={() => handleAddMapping(activeTab)}>
-            + Add Mapping
-          </button>
-          <button className="btn btn-secondary" onClick={() => handleResetMaps(activeTab)}>
-            Reset to Default
-          </button>
-          <button className="btn btn-primary" onClick={() => handleSaveModelMaps(activeTab)}>
-            Save Mappings
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
-        <h3>Config</h3>
-        <button className="btn btn-primary" style={{ marginRight: 8 }} onClick={handleExport}>
-          Export Config
-        </button>
-        <span style={{ color: '#888', fontSize: '12px' }}>Import coming in Phase 2</span>
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        <button className="btn btn-primary" onClick={handleSaveSettings}>
+      <div className="flex items-center gap-4">
+        <Button onClick={handleSaveSettings}>
+          <Save className="mr-2 h-4 w-4" />
           Save Settings
-        </button>
-        {saved && <span style={{ marginLeft: 12, color: '#00a86b' }}>Saved!</span>}
+        </Button>
+        {saved && <span className="text-sm text-green-600">Saved!</span>}
       </div>
     </div>
   );

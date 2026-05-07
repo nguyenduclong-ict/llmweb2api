@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import Sidebar from './Sidebar';
+import { ReactNode } from "react";
+import Sidebar from "./Sidebar";
 
 interface LayoutProps {
   children: ReactNode;
@@ -7,9 +7,9 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   return (
-    <div style={{ display: 'flex', height: '100vh' }}>
+    <div className="flex h-screen">
       <Sidebar />
-      <main style={{ flex: 1, padding: 24, overflow: 'auto', background: '#f5f5f5' }}>{children}</main>
+      <main className="flex-1 overflow-auto p-8 bg-muted/30">{children}</main>
     </div>
   );
 }

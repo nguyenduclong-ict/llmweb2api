@@ -5,7 +5,7 @@ import * as client from './client';
 import type { DeepSeekCompletionPayload } from './types';
 import { FILE_UPLOAD_THRESHOLD } from './types';
 import { getModelType } from './models';
-import { injectToolPrompt } from './tool_prompt';
+import { TOOL_SYSTEM_PROMPT, buildToolPrompt, block, BlockName } from './tool_prompt';
 import { ToolSieve } from './tool_sieve';
 import { parseToolCallXML } from './tool_parser';
 import type { ParsedToolCall } from './tool_parser';
@@ -16,12 +16,16 @@ interface ImageRef {
   mimeType?: string;
 }
 
-type ToolDef = { type: 'function'; function: { name: string; description?: string; parameters?: Record<string, unknown> } };
+type ToolDef = {
+  type: 'function';
+  function: { name: string; description?: string; parameters?: Record<string, unknown> };
+};
 
 class DeepSeekProvider implements Provider {
   readonly name = 'deepseek';
   private uploadedFileIds: string[] = [];
   private sentToolsHash = new Map<string, string>();
+  private sentSystemPrompt = new Set<string>();
 
   async login(settings: Record<string, unknown>): Promise<SessionContext> {
     const email = settings.email as string;
@@ -46,12 +50,8 @@ class DeepSeekProvider implements Provider {
 
   async chat(ctx: SessionContext, request: InternalRequest): Promise<InternalResponse> {
     const { prompt, refFileIds } = await this.buildPromptAndFiles(ctx.token, ctx.sessionId, request);
-    console.log('[CHAT] Getting PoW...');
     const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/completion');
-    console.log('[CHAT] PoW done, calling completion...');
-    const parentMessageId = ctx.metadata.parentMessageId
-      ? Number(ctx.metadata.parentMessageId)
-      : null;
+    const parentMessageId = ctx.metadata.parentMessageId ? Number(ctx.metadata.parentMessageId) : null;
     const payload: DeepSeekCompletionPayload = {
       chat_session_id: ctx.sessionId,
       parent_message_id: parentMessageId,
@@ -63,18 +63,29 @@ class DeepSeekProvider implements Provider {
     };
 
     let text = '';
+    let reasoning = '';
+    let currentFragmentType: string | null = null;
     let gotMessageId = false;
     for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload)) {
       const raw = line.slice(5).trim();
       if (!raw) continue;
       try {
         const chunk = JSON.parse(raw);
+
         if (!gotMessageId && chunk.response_message_id != null) {
           ctx.metadata.lastResponseMessageId = String(chunk.response_message_id);
+          if (chunk.request_message_id != null) {
+            ctx.metadata.lastRequestMessageId = String(chunk.request_message_id);
+          }
           gotMessageId = true;
           continue;
         }
-        text += extractContent(chunk);
+        const result = parseContent(chunk, currentFragmentType);
+        if (result) {
+          currentFragmentType = result.nextType;
+          text += result.content;
+          if (result.reasoningContent) reasoning += result.reasoningContent;
+        }
       } catch {
         continue;
       }
@@ -87,12 +98,21 @@ class DeepSeekProvider implements Provider {
     if (toolCalls.length > 0) {
       responseContent = '';
       finishReason = 'tool_calls';
+    } else if (text.includes('[#llmweb2api:tool_call]')) {
+      console.error('[DEEPSEEK] Non-stream: text contains tool_call marker but parsed 0 tool calls.');
+      console.error('[DEEPSEEK] Full response text:', text);
+    }
+
+    // Inject conversation_id as first reasoning line (same as streaming)
+    if (reasoning && ctx.metadata.conversationId) {
+      reasoning = `#conversation_id:${ctx.metadata.conversationId}\n` + reasoning;
     }
 
     return {
       id: `ds-${Date.now()}`,
       model: request.model,
       content: responseContent,
+      reasoningContent: reasoning || undefined,
       finishReason,
       toolCalls: toolCalls?.map((tc) => ({
         id: `call_${Date.now()}_${tc.name}`,
@@ -104,11 +124,142 @@ class DeepSeekProvider implements Provider {
   }
 
   async *chatStream(ctx: SessionContext, request: InternalRequest): AsyncGenerator<InternalStreamChunk> {
+    const editMessageId = ctx.metadata.editMessageId as number | undefined;
+
+    // Regeneration via edit_message
+    if (editMessageId) {
+      const lastUserMsg = [...request.messages].reverse().find((m) => m.role === 'user');
+      const msgContent = lastUserMsg
+        ? typeof lastUserMsg.content === 'string'
+          ? lastUserMsg.content
+          : Array.isArray(lastUserMsg.content)
+            ? lastUserMsg.content.map((b: any) => b.text || '').join('')
+            : ''
+        : '';
+      const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/edit_message');
+      const editPayload: client.EditMessagePayload = {
+        chat_session_id: ctx.sessionId,
+        message_id: editMessageId,
+        prompt: msgContent,
+        thinking_enabled: !!request.reasoningEffort,
+        search_enabled: true,
+      };
+
+      const streamId = `ds-${Date.now()}`;
+      let totalTokens = 0;
+      let currentFragmentType: string | null = null;
+      let firstChunk = true;
+      let gotMessageId = false;
+      let hasToolCalls = false;
+      const sieve = new ToolSieve();
+
+      for await (const line of client.streamEditMessageLines(ctx.token, powResponse, editPayload)) {
+        const raw = line.slice(5).trim();
+        if (!raw) continue;
+        if (raw.indexOf('FINISHED') >= 0 && raw.indexOf('response/status') >= 0) break;
+
+        try {
+          const chunk = JSON.parse(raw);
+
+          if (!gotMessageId && chunk.response_message_id != null) {
+            ctx.metadata.lastResponseMessageId = String(chunk.response_message_id);
+            if (chunk.request_message_id != null) {
+              ctx.metadata.lastRequestMessageId = String(chunk.request_message_id);
+            }
+            gotMessageId = true;
+            continue;
+          }
+          const result = parseContent(chunk, currentFragmentType);
+          if (result) {
+            currentFragmentType = result.nextType;
+            if (result.content || result.reasoningContent) {
+              const content = result.content;
+              let reasoning = result.reasoningContent;
+
+              if (firstChunk && ctx.metadata.conversationId) {
+                yield {
+                  id: streamId,
+                  model: request.model,
+                  content: '',
+                  reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
+                  finishReason: null,
+                };
+                firstChunk = false;
+              }
+
+              if (content) {
+                const events = sieve.processChunk(content);
+                for (const ev of events) {
+                  if (ev.type === 'content' && hasText(ev.text)) {
+                    totalTokens += this.estimateTokens(ev.text);
+                    yield {
+                      id: streamId,
+                      model: request.model,
+                      content: ev.text,
+                      reasoningContent: reasoning || undefined,
+                      finishReason: null,
+                    };
+                    reasoning = undefined;
+                  } else if (ev.type === 'tool_calls' && ev.toolCalls) {
+                    hasToolCalls = true;
+                    for (const delta of buildToolCallDeltas(ev.toolCalls, streamId)) {
+                      yield {
+                        id: streamId,
+                        model: request.model,
+                        content: '',
+                        toolCallDelta: delta,
+                        finishReason: null,
+                      };
+                    }
+                  }
+                }
+                reasoning = undefined;
+              } else if (hasText(reasoning)) {
+                yield {
+                  id: streamId,
+                  model: request.model,
+                  content: '',
+                  reasoningContent: reasoning,
+                  finishReason: null,
+                };
+              }
+            }
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      // Flush
+      const flushEvents = sieve.flush();
+      for (const ev of flushEvents) {
+        if (ev.type === 'content' && hasText(ev.text)) {
+          totalTokens += this.estimateTokens(ev.text);
+          yield { id: streamId, model: request.model, content: ev.text, finishReason: null };
+        } else if (ev.type === 'tool_calls' && ev.toolCalls) {
+          hasToolCalls = true;
+          for (const delta of buildToolCallDeltas(ev.toolCalls, streamId)) {
+            yield { id: streamId, model: request.model, content: '', toolCallDelta: delta, finishReason: null };
+          }
+        }
+      }
+
+      this.uploadedFileIds = [];
+
+      yield {
+        id: streamId,
+        model: request.model,
+        content: '',
+        finishReason: hasToolCalls ? 'tool_calls' : 'stop',
+        usage: { inputTokens: this.estimateTokens(msgContent), outputTokens: totalTokens },
+      };
+      return;
+    }
+
+    // Normal completion flow
     const { prompt, refFileIds } = await this.buildPromptAndFiles(ctx.token, ctx.sessionId, request);
     const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/completion');
-    const parentMessageId = ctx.metadata.parentMessageId
-      ? Number(ctx.metadata.parentMessageId)
-      : null;
+    const parentMessageId = ctx.metadata.parentMessageId ? Number(ctx.metadata.parentMessageId) : null;
     const payload: DeepSeekCompletionPayload = {
       chat_session_id: ctx.sessionId,
       parent_message_id: parentMessageId,
@@ -134,8 +285,12 @@ class DeepSeekProvider implements Provider {
 
       try {
         const chunk = JSON.parse(raw);
+
         if (!gotMessageId && chunk.response_message_id != null) {
           ctx.metadata.lastResponseMessageId = String(chunk.response_message_id);
+          if (chunk.request_message_id != null) {
+            ctx.metadata.lastRequestMessageId = String(chunk.request_message_id);
+          }
           gotMessageId = true;
           continue;
         }
@@ -148,49 +303,47 @@ class DeepSeekProvider implements Provider {
 
             if (firstChunk && ctx.metadata.conversationId) {
               yield {
-                id: streamId, model: request.model,
+                id: streamId,
+                model: request.model,
                 content: '',
-                reasoningContent: reasoning
-                  ? `#conversation_id:${ctx.metadata.conversationId}\n${reasoning}`
-                  : `#conversation_id:${ctx.metadata.conversationId}\n`,
+                reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
                 finishReason: null,
               };
               firstChunk = false;
-              reasoning = undefined;
             }
 
             if (content) {
-              if (content.indexOf('<tool_calls>') >= 0 || content.indexOf('<') === 0) {
-                console.log('[STREAM] feeding sieve content head:', content.slice(0, 80));
-              }
               const events = sieve.processChunk(content);
               for (const ev of events) {
-                if (ev.type === 'content' && ev.text) {
+                if (ev.type === 'content' && hasText(ev.text)) {
                   totalTokens += this.estimateTokens(ev.text);
                   yield {
-                    id: streamId, model: request.model,
-                    content: ev.text, reasoningContent: reasoning || undefined,
+                    id: streamId,
+                    model: request.model,
+                    content: ev.text,
+                    reasoningContent: reasoning || undefined,
                     finishReason: null,
                   };
                   reasoning = undefined;
-                } else if (ev.type === 'tool_calls' && ev.xml) {
+                } else if (ev.type === 'tool_calls' && ev.toolCalls) {
                   hasToolCalls = true;
-                  console.log('[STREAM] sieve emitted tool_calls, parsing...');
-                  const parsed = parseToolCallXML(ev.xml);
-                  console.log('[STREAM] parsed', parsed.length, 'tool calls:', parsed.map((t) => t.name).join(', '));
-                  for (const delta of buildToolCallDeltas(parsed, streamId)) {
+                  for (const delta of buildToolCallDeltas(ev.toolCalls, streamId)) {
                     yield {
-                      id: streamId, model: request.model,
-                      content: '', toolCallDelta: delta,
+                      id: streamId,
+                      model: request.model,
+                      content: '',
+                      toolCallDelta: delta,
                       finishReason: null,
                     };
                   }
                 }
               }
-            } else if (reasoning) {
+            } else if (hasText(reasoning)) {
               yield {
-                id: streamId, model: request.model,
-                content: '', reasoningContent: reasoning,
+                id: streamId,
+                model: request.model,
+                content: '',
+                reasoningContent: reasoning,
                 finishReason: null,
               };
             }
@@ -204,19 +357,22 @@ class DeepSeekProvider implements Provider {
     // Flush remaining sieved content
     const flushEvents = sieve.flush();
     for (const ev of flushEvents) {
-      if (ev.type === 'content' && ev.text) {
+      if (ev.type === 'content' && hasText(ev.text)) {
         totalTokens += this.estimateTokens(ev.text);
         yield {
-          id: streamId, model: request.model,
-          content: ev.text, finishReason: null,
+          id: streamId,
+          model: request.model,
+          content: ev.text,
+          finishReason: null,
         };
-      } else if (ev.type === 'tool_calls' && ev.xml) {
+      } else if (ev.type === 'tool_calls' && ev.toolCalls) {
         hasToolCalls = true;
-        const parsed = parseToolCallXML(ev.xml);
-        for (const delta of buildToolCallDeltas(parsed, streamId)) {
+        for (const delta of buildToolCallDeltas(ev.toolCalls, streamId)) {
           yield {
-            id: streamId, model: request.model,
-            content: '', toolCallDelta: delta,
+            id: streamId,
+            model: request.model,
+            content: '',
+            toolCallDelta: delta,
             finishReason: null,
           };
         }
@@ -235,6 +391,8 @@ class DeepSeekProvider implements Provider {
   }
 
   async dispose(ctx: SessionContext): Promise<void> {
+    this.sentSystemPrompt.delete(ctx.sessionId);
+    this.sentToolsHash.delete(ctx.sessionId);
     try {
       await client.deleteSession(ctx.token, ctx.sessionId);
     } catch {
@@ -247,46 +405,81 @@ class DeepSeekProvider implements Provider {
     sessionId: string,
     request: InternalRequest,
   ): Promise<{ prompt: string; refFileIds: string[] }> {
-    let messages = request.messages;
+    const messages = request.messages;
     const tools = request.tools as ToolDef[] | undefined;
     const hasTools = !!(tools && tools.length > 0);
-    console.log('[DEEPSEEK] buildPromptAndFiles: tools=', hasTools ? `${tools.length} tools` : 'none');
 
-    if (hasTools) {
-      const toolsHash = crypto.createHash('md5').update(JSON.stringify(tools)).digest('hex');
-      const prevHash = this.sentToolsHash.get(sessionId);
-      if (toolsHash !== prevHash) {
-        this.sentToolsHash.set(sessionId, toolsHash);
-        messages = injectToolPrompt(messages, tools!);
-        console.log('[DEEPSEEK] tools changed for session, injecting tool prompt');
-      } else {
-        console.log('[DEEPSEEK] tools unchanged for session, skipping injection');
-      }
-    }
-
+    // Upload images first
     const imageRefs = extractImageRefs(messages as Array<{ role: string; content: unknown }>);
     const imageFileIds = imageRefs.length > 0 ? await uploadImageRefs(token, imageRefs) : [];
 
-    const xml = messages.map((m) => {
-      const text = messageContent(m as any);
-      return `<${m.role}>\n${text}\n</${m.role}>`;
-    }).join('\n\n');
+    // Top section: TOOL_SYSTEM_PROMPT + (optional) tools block
+    // Inject system prompt only on new conversation or when tools change
+    const topParts: string[] = [];
+
+    let toolsChanged = false;
+    if (hasTools) {
+      const toolsHash = crypto.createHash('md5').update(JSON.stringify(tools)).digest('hex');
+      const prevHash = this.sentToolsHash.get(sessionId);
+      toolsChanged = toolsHash !== prevHash;
+      if (toolsChanged) {
+        this.sentToolsHash.set(sessionId, toolsHash);
+      }
+    }
+
+    if (!this.sentSystemPrompt.has(sessionId) || toolsChanged) {
+      this.sentSystemPrompt.add(sessionId);
+      topParts.push(TOOL_SYSTEM_PROMPT);
+    }
+
+    if (hasTools && toolsChanged) {
+      topParts.push(buildToolPrompt(tools!));
+    }
+
+    // Message section: only user + tool messages.
+    // Skip assistant — DeepSeek API is stateful (chat_session_id + parent_message_id),
+    // so the server already knows what the assistant said.
+    const messageXml = messages
+      .filter((m) => m.role === 'user' || m.role === 'tool')
+      .map((m) => {
+        const text = messageContent(m as any);
+        if (m.role === 'tool') {
+          return block('tool', text);
+        }
+        return block('user', text);
+      })
+      .join('\n\n');
 
     const t0 = Date.now();
     let prompt: string;
     const fileIds: string[] = [];
 
-    if (xml.length >= FILE_UPLOAD_THRESHOLD) {
-      console.log(`[DEEPSEEK] prompt size=${xml.length} >= threshold=${FILE_UPLOAD_THRESHOLD}, uploading as file`);
+    const fullPrompt = [...topParts, messageXml].join('\n\n');
+
+    if (fullPrompt.length >= FILE_UPLOAD_THRESHOLD) {
+      console.log(
+        `[DEEPSEEK] prompt size=${fullPrompt.length} >= threshold=${FILE_UPLOAD_THRESHOLD}, uploading message blocks as file`,
+      );
       const filename = `${this.name}_${Date.now()}.txt`;
-      const uploadResult = await client.uploadFile(token, filename, xml);
+      const uploadResult = await client.uploadFile(token, filename, messageXml);
       this.uploadedFileIds.push(uploadResult.id);
       fileIds.push(uploadResult.id);
       await client.pollFileReady(token, uploadResult.id);
-      prompt = '';
+
+      const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');
+      const fileParts = [
+        ...topParts,
+        block('system', `Please read the attached file (${filename}) to understand the context.`),
+      ];
+      if (lastUserMsg) {
+        const userContent =
+          typeof lastUserMsg.content === 'string' ? lastUserMsg.content : messageContent(lastUserMsg as any);
+        fileParts.push(block('user', userContent));
+      }
+      prompt = fileParts.join('\n\n');
     } else {
-      console.log(`[DEEPSEEK] prompt size=${xml.length} < threshold=${FILE_UPLOAD_THRESHOLD}, inline`);
-      prompt = xml;
+      console.log(`[DEEPSEEK] prompt size=${fullPrompt.length} < threshold=${FILE_UPLOAD_THRESHOLD}, inline`);
+      prompt = fullPrompt;
     }
     console.log(`[DEEPSEEK] buildPromptAndFiles took ${Date.now() - t0}ms`);
 
@@ -312,7 +505,7 @@ function extractImageRefs(messages: Array<{ role: string; content: unknown }>): 
         refs.push({
           url,
           isDataUrl,
-          mimeType: isDataUrl ? (url.match(/data:(.+);base64/)?.[1] || 'image/png') : undefined,
+          mimeType: isDataUrl ? url.match(/data:(.+);base64/)?.[1] || 'image/png' : undefined,
         });
       }
     }
@@ -361,13 +554,17 @@ async function uploadImageRefs(token: string, refs: ImageRef[]): Promise<string[
   return fileIds;
 }
 
-function messageContent(msg: { content: string | Array<{ type: string; text?: string; image_url?: { url: string } }> }): string {
+function messageContent(msg: {
+  content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
+}): string {
   if (typeof msg.content === 'string') return msg.content;
-  return msg.content.map((b) => {
-    if ('text' in b) return b.text ?? '';
-    if ('image_url' in b) return '[image]';
-    return '';
-  }).join('');
+  return msg.content
+    .map((b) => {
+      if ('text' in b) return b.text ?? '';
+      if ('image_url' in b) return '[image]';
+      return '';
+    })
+    .join('');
 }
 
 interface ParsedResult {
@@ -388,14 +585,6 @@ const SKIP_PATTERNS = [
 
 function shouldSkip(path: string): boolean {
   return SKIP_PATTERNS.some((p) => path.includes(p));
-}
-
-function shouldSkipValue(v: unknown): boolean {
-  if (typeof v === 'string') {
-    const patterns = ['FINISHED', 'APPEND', 'status'];
-    return patterns.includes(v.trim());
-  }
-  return false;
 }
 
 function isContentPath(p: string): boolean {
@@ -437,7 +626,8 @@ function parseContent(chunk: Record<string, unknown>, currentFragmentType: strin
 
   // batch fragments: {"p":"response/fragments","o":"APPEND","v":[{...}]}
   if (path === 'response/fragments' && op === 'APPEND' && Array.isArray(chunk.v)) {
-    const { text, thinking, nextType } = parseFragments(chunk.v as Array<Record<string, unknown>>);
+    const frags = chunk.v as Array<Record<string, unknown>>;
+    const { text, thinking, nextType } = parseFragments(frags);
     if (text || thinking) return { content: text, reasoningContent: thinking || undefined, nextType };
   }
 
@@ -456,6 +646,9 @@ function parseContent(chunk: Record<string, unknown>, currentFragmentType: strin
   if (!text) return null;
 
   if (path && isContentPath(path)) {
+    if (currentFragmentType === 'thinking') {
+      return { content: '', reasoningContent: text, nextType: 'thinking' };
+    }
     return { content: text, nextType: 'text' };
   }
   if (path && isThinkingPath(path)) {
@@ -474,37 +667,8 @@ function parseContent(chunk: Record<string, unknown>, currentFragmentType: strin
   return null;
 }
 
-function extractContent(chunk: Record<string, unknown>): string {
-  const path = chunk.p as string | undefined;
-  const op = chunk.o as string | undefined;
-
-  if (path && shouldSkip(path)) return '';
-  if (!path && shouldSkipValue(chunk.v)) return '';
-
-  if (path && isContentPath(path)) return extractTextValue(chunk.v);
-  if (path && isThinkingPath(path)) return extractTextValue(chunk.v);
-
-  if (path === 'response/fragments' && op === 'APPEND' && Array.isArray(chunk.v)) {
-    return (chunk.v as Array<Record<string, unknown>>)
-      .map((f) => f.content as string)
-      .filter(Boolean)
-      .join('');
-  }
-
-  // nested response with fragments — extract visible text only
-  if (!path && !op && chunk.v && typeof chunk.v === 'object') {
-    const vObj = chunk.v as Record<string, unknown>;
-    const resp = vObj.response as Record<string, unknown> | undefined;
-    if (resp?.fragments && Array.isArray(resp.fragments)) {
-      return (resp.fragments as Array<Record<string, unknown>>)
-        .filter((f) => f.type !== 'THINK' && f.type !== 'THINKING')
-        .map((f) => f.content as string)
-        .filter(Boolean)
-        .join('');
-    }
-  }
-
-  return extractTextValue(chunk.v);
+function hasText(s: unknown): s is string {
+  return typeof s === 'string' && s.trim().length > 0;
 }
 
 function extractTextValue(v: unknown): string {

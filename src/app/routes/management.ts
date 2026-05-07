@@ -29,6 +29,10 @@ managementRoutes.post('/auth/login', (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
+managementRoutes.get('/auth/verify', (req: Request, res: Response) => {
+  res.json({ authenticated: true });
+});
+
 // -- Provider Items --
 managementRoutes.get('/accounts', dashboardAuth, (_req: Request, res: Response) => {
   res.json(accountModel.getAll());

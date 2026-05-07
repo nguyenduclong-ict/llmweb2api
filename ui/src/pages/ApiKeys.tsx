@@ -1,5 +1,10 @@
-import { useEffect, useState } from 'react';
-import { apiGet, apiPost, apiPut, apiDelete } from '../api/client';
+import { useEffect, useState } from "react";
+import { apiGet, apiPost, apiPut, apiDelete } from "../api/client";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { ApiKeyModal } from "../components/ApiKeyModal";
+import { Plus, Pencil, Power, Trash2, Copy, Check } from "lucide-react";
 
 interface ApiKey {
   id: number;
@@ -12,190 +17,156 @@ interface ApiKey {
 
 export default function ApiKeys() {
   const [keys, setKeys] = useState<ApiKey[]>([]);
-  const [showAdd, setShowAdd] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [formName, setFormName] = useState('');
-  const [formKey, setFormKey] = useState('');
-  const [formCache, setFormCache] = useState(false);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingKey, setEditingKey] = useState<ApiKey | null>(null);
+  const [copiedId, setCopiedId] = useState<number | null>(null);
 
   useEffect(() => {
     loadKeys();
   }, []);
 
   async function loadKeys() {
-    const data = await apiGet<ApiKey[]>('/api/api-keys');
+    const data = await apiGet<ApiKey[]>("/api/api-keys");
     setKeys(data);
   }
 
-  function resetForm() {
-    setFormName('');
-    setFormKey('');
-    setFormCache(false);
-    setEditingId(null);
-    setShowAdd(false);
-  }
-
-  function startEdit(item: ApiKey) {
-    setEditingId(item.id);
-    setFormName(item.name);
-    setFormCache(!!item.cache);
-    setShowAdd(true);
-  }
-
-  function handleGenerateKey() {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let key = 'sk-';
-    for (let i = 0; i < 48; i++) key += chars[Math.floor(Math.random() * chars.length)];
-    setFormKey(key);
-  }
-
-  async function handleSave() {
-    if (!formName.trim()) return;
-
-    if (editingId !== null) {
-      await apiPut(`/api/api-keys/${editingId}`, { name: formName, cache: formCache });
+  async function handleSave(data: any) {
+    if (editingKey) {
+      await apiPut(`/api/api-keys/${editingKey.id}`, data);
     } else {
-      const created = await apiPost<ApiKey>('/api/api-keys', {
-        name: formName.trim(),
-        key: formKey || undefined,
-        cache: formCache,
-      });
-      if (!editingId) {
-        setCopiedKey(created.key);
-        navigator.clipboard.writeText(created.key);
-      }
+      return await apiPost<ApiKey>("/api/api-keys", data);
     }
-    resetForm();
-    loadKeys();
+    await loadKeys();
   }
 
   async function handleToggle(item: ApiKey) {
     await apiPut(`/api/api-keys/${item.id}`, { enabled: item.enabled ? 0 : 1 });
-    loadKeys();
+    await loadKeys();
   }
 
   async function handleDelete(id: number) {
-    await apiDelete(`/api/api-keys/${id}`);
-    loadKeys();
+    if (confirm("Are you sure you want to delete this API key?")) {
+      await apiDelete(`/api/api-keys/${id}`);
+      await loadKeys();
+    }
+  }
+
+  function openEdit(item: ApiKey) {
+    setEditingKey(item);
+    setModalOpen(true);
+  }
+
+  function openNew() {
+    setEditingKey(null);
+    setModalOpen(true);
+  }
+
+  function handleKeyGenerated(key: string) {
+    setCopiedId(-1);
+    navigator.clipboard.writeText(key);
+    setTimeout(() => setCopiedId(null), 2000);
+  }
+
+  function copyKey(key: string, id: number) {
+    navigator.clipboard.writeText(key);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   }
 
   return (
-    <div>
-      <div className="page-header">
-        <h1>API Keys</h1>
-        <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
-          + Create API Key
-        </button>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">API Keys</h1>
+          <p className="text-muted-foreground">Manage API keys for authentication</p>
+        </div>
+        <Button onClick={openNew}>
+          <Plus className="mr-2 h-4 w-4" />
+          Create API Key
+        </Button>
       </div>
 
-      {copiedKey && (
-        <div className="card" style={{ background: '#e6f9f2', borderLeft: '4px solid #00d4aa' }}>
-          <strong>API Key Created & Copied!</strong>
-          <p style={{ marginTop: 8, fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '12px' }}>{copiedKey}</p>
-          <button className="btn btn-secondary" style={{ marginTop: 8 }} onClick={() => setCopiedKey(null)}>
-            Dismiss
-          </button>
+      <Card>
+        <CardHeader>
+          <CardTitle>API Keys</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>ID</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Key</TableHead>
+                <TableHead>Cache</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {keys.map((k) => (
+                <TableRow key={k.id}>
+                  <TableCell>{k.id}</TableCell>
+                  <TableCell className="font-medium">{k.name}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <code className="rounded bg-muted px-2 py-1 text-xs">
+                        {k.key.slice(0, 12)}...{k.key.slice(-8)}
+                      </code>
+                      <Button variant="ghost" size="sm" onClick={() => copyKey(k.key, k.id)}>
+                        {copiedId === k.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                      </Button>
+                    </div>
+                  </TableCell>
+                  <TableCell>{k.cache ? "Yes" : "No"}</TableCell>
+                  <TableCell>
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
+                        k.enabled ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {k.enabled ? "Active" : "Disabled"}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-sm">{new Date(k.created_at).toLocaleDateString()}</TableCell>
+                  <TableCell className="text-right space-x-2">
+                    <Button variant="ghost" size="sm" onClick={() => openEdit(k)}>
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => handleToggle(k)}>
+                      <Power className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => handleDelete(k.id)}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {keys.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
+                    No API keys yet
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <ApiKeyModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        editingKey={editingKey}
+        onSave={handleSave}
+        onKeyGenerated={handleKeyGenerated}
+      />
+
+      {copiedId === -1 && (
+        <div className="fixed bottom-4 right-4 rounded-lg bg-green-100 p-4 text-green-700 shadow-lg">
+          <p className="text-sm">API Key copied to clipboard!</p>
         </div>
       )}
-
-      {showAdd && (
-        <div className="card">
-          <h3>{editingId !== null ? 'Edit API Key' : 'Create New API Key'}</h3>
-          <div className="form-group">
-            <label>Name</label>
-            <input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="e.g. My App" />
-          </div>
-          {editingId === null && (
-            <div className="form-group">
-              <label>Key</label>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  value={formKey}
-                  onChange={(e) => setFormKey(e.target.value)}
-                  placeholder="Leave empty to auto-generate"
-                  style={{ flex: 1, fontFamily: 'monospace', fontSize: '12px' }}
-                />
-                <button className="btn btn-secondary" onClick={handleGenerateKey} style={{ whiteSpace: 'nowrap' }}>
-                  Generate
-                </button>
-              </div>
-            </div>
-          )}
-          <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input
-              type="checkbox"
-              id="cache-check"
-              checked={formCache}
-              onChange={(e) => setFormCache(e.target.checked)}
-              style={{ width: 16, height: 16 }}
-            />
-            <label htmlFor="cache-check" style={{ margin: 0, cursor: 'pointer' }}>
-              Enable cache
-            </label>
-          </div>
-          <button className="btn btn-primary" onClick={handleSave}>
-            {editingId !== null ? 'Update' : 'Create'}
-          </button>
-          <button className="btn btn-secondary" style={{ marginLeft: 8 }} onClick={resetForm}>
-            Cancel
-          </button>
-        </div>
-      )}
-
-      <div className="card">
-        <table>
-          <thead>
-            <tr>
-              <th style={{ width: 50 }}>ID</th>
-              <th>Name</th>
-              <th>Key</th>
-              <th style={{ width: 70 }}>Cache</th>
-              <th style={{ width: 80 }}>Status</th>
-              <th>Created</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {keys.map((k) => (
-              <tr key={k.id}>
-                <td>{k.id}</td>
-                <td>
-                  <strong>{k.name}</strong>
-                </td>
-                <td style={{ fontFamily: 'monospace', fontSize: '11px' }}>
-                  {k.key.slice(0, 12)}...{k.key.slice(-8)}
-                </td>
-                <td style={{ textAlign: 'center' }}>{k.cache ? 'Yes' : 'No'}</td>
-                <td>
-                  <span className={`status-badge ${k.enabled ? 'enabled' : 'disabled'}`}>
-                    {k.enabled ? 'Active' : 'Disabled'}
-                  </span>
-                </td>
-                <td>{new Date(k.created_at).toLocaleDateString()}</td>
-                <td>
-                  <button className="btn btn-secondary" style={{ marginRight: 6 }} onClick={() => startEdit(k)}>
-                    Edit
-                  </button>
-                  <button className="btn btn-secondary" style={{ marginRight: 6 }} onClick={() => handleToggle(k)}>
-                    {k.enabled ? 'Disable' : 'Enable'}
-                  </button>
-                  <button className="btn btn-danger" onClick={() => handleDelete(k.id)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {keys.length === 0 && (
-              <tr>
-                <td colSpan={7} style={{ textAlign: 'center', color: '#999' }}>
-                  No API keys yet
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }

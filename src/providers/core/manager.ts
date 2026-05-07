@@ -2,6 +2,7 @@ import type { Provider, SessionContext } from '../../types/provider';
 import type { InternalRequest, InternalResponse, InternalStreamChunk, InternalMessage } from '../../types/common';
 import * as accountModel from '../../app/models/account';
 import * as conversationModel from '../../app/models/conversation';
+import { deleteSession as deleteDeepSeekSession } from '../deepseek/client';
 
 const providerRegistry = new Map<string, Provider>();
 
@@ -19,6 +20,7 @@ interface SessionEntry {
   deepseekSessionId: string;
   accountId: number;
   parentMessageId?: string;
+  lastRequestMessageId?: string;
 }
 
 const sessionStore = new Map<string, SessionEntry>();
@@ -40,6 +42,13 @@ function updateSessionParent(conversationId: string, parentMessageId: string): v
   const entry = sessionStore.get(conversationId);
   if (entry) {
     entry.parentMessageId = parentMessageId;
+  }
+}
+
+function updateSessionLastRequestId(conversationId: string, lastRequestMessageId: string): void {
+  const entry = sessionStore.get(conversationId);
+  if (entry) {
+    entry.lastRequestMessageId = lastRequestMessageId;
   }
 }
 
@@ -106,6 +115,9 @@ export async function processChatStream(
       if (ctx.metadata.lastResponseMessageId) {
         updateSessionParent(ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
       }
+      if (ctx.metadata.lastRequestMessageId) {
+        updateSessionLastRequestId(ctx.sessionId, ctx.metadata.lastRequestMessageId as string);
+      }
     }
   }
 
@@ -118,11 +130,14 @@ async function reuseSession(providerName: string, conversationId: string): Promi
     console.log(`[CONV] Reusing session: ${entry.deepseekSessionId}`);
     return buildSessionContext(entry.accountId, entry.deepseekSessionId);
   }
-  // Session expired or server restarted — create a new one with the same conversationId
+
+  // Session not in memory — start a brand new conversation
+  console.log(`[CONV] ${conversationId} not in sessionStore, starting new conversation`);
   const provider = ensureProvider(providerName);
   const account = await selectAccount(providerName);
   const ctx = await createSession(provider, account);
-  saveSession(conversationId, ctx.sessionId, ctx.accountId);
+  ctx.metadata.conversationId = ctx.sessionId;
+  saveSession(ctx.sessionId, ctx.sessionId, ctx.accountId);
   return ctx;
 }
 
@@ -166,9 +181,33 @@ export async function processChatStreamWithCache(
   return processFirstCachedChatStream(providerName, request);
 }
 
-export function dumpConversation(conversationId: string): void {
+export async function dumpConversation(conversationId: string): Promise<void> {
   conversationCache.delete(conversationId);
   conversationModel.removeConversation(conversationId);
+
+  const entry = sessionStore.get(conversationId);
+  if (entry) {
+    sessionStore.delete(conversationId);
+    try {
+      const items = accountModel.getByProvider('deepseek');
+      const item = items.find((i) => i.id === entry.accountId);
+      if (item) {
+        let session: Record<string, unknown>;
+        try {
+          session = JSON.parse(item.session || '{}');
+        } catch {
+          session = {};
+        }
+        const token = (session.token as string) || '';
+        if (token) {
+          await deleteDeepSeekSession(token, entry.deepseekSessionId);
+          console.log(`[CONV] Deleted DeepSeek session ${entry.deepseekSessionId} for ${conversationId}`);
+        }
+      }
+    } catch (err) {
+      console.error(`[CONV] Failed to delete DeepSeek session for ${conversationId}:`, err);
+    }
+  }
 }
 
 // --- Internal: Auth + Session ---
@@ -253,6 +292,33 @@ async function createSession(provider: Provider, account: AccountSelection): Pro
   return ctx;
 }
 
+async function createFreshSession(accountId: number, conversationId: string): Promise<SessionContext> {
+  const items = accountModel.getByProvider('deepseek');
+  const item = items.find((i) => i.id === accountId);
+  if (!item) throw new Error(`Account ${accountId} not found`);
+
+  let settings: Record<string, unknown>;
+  try {
+    settings = JSON.parse(item.settings);
+  } catch {
+    settings = {};
+  }
+  let session: Record<string, unknown>;
+  try {
+    session = JSON.parse(item.session || '{}');
+  } catch {
+    session = {};
+  }
+
+  const token = await ensureToken({ itemId: item.id, settings, session });
+  const provider = ensureProvider('deepseek');
+  const ctx = await provider.createSession({ accountId: item.id, token, sessionId: '', metadata: {} });
+  ctx.metadata.conversationId = conversationId;
+  saveSession(conversationId, ctx.sessionId, accountId);
+  console.log(`[CONV] Fresh session created: ${ctx.sessionId} for conversation ${conversationId}`);
+  return ctx;
+}
+
 async function buildSessionContext(accountId: number, conversationId: string): Promise<SessionContext> {
   const items = accountModel.getByProvider('deepseek');
   const item = items.find((i) => i.id === accountId);
@@ -326,6 +392,8 @@ async function processFirstCachedChatStream(
 
   const innerStream = provider.chatStream(ctx, request);
 
+  const messages = [...request.messages];
+
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
     try {
       for await (const chunk of innerStream) {
@@ -335,16 +403,17 @@ async function processFirstCachedChatStream(
       if (ctx.metadata.lastResponseMessageId) {
         updateSessionParent(ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
       }
+      if (ctx.metadata.lastRequestMessageId) {
+        updateSessionLastRequestId(ctx.sessionId, ctx.metadata.lastRequestMessageId as string);
+      }
+      conversationCache.set(ctx.sessionId, {
+        conversationId: ctx.sessionId,
+        accountId: account.itemId,
+        previousMessages: messages,
+      });
+      conversationModel.saveConversation(ctx.sessionId, account.itemId, providerName, messages);
     }
   }
-
-  const messages = [...request.messages];
-  conversationCache.set(ctx.sessionId, {
-    conversationId: ctx.sessionId,
-    accountId: account.itemId,
-    previousMessages: messages,
-  });
-  conversationModel.saveConversation(ctx.sessionId, account.itemId, providerName, messages);
 
   return { stream: wrappedStream(), accountId: account.itemId, conversationId: ctx.sessionId };
 }
@@ -361,17 +430,56 @@ async function processCachedChat(
   if (!cached) {
     const dbMessages = conversationModel.loadMessages(conversationId);
     if (!dbMessages || dbMessages.length === 0) {
-      throw new Error(`Conversation ${conversationId} not found`);
+      console.log(`[CONV] ${conversationId} not found in cache or DB, starting new cached conversation`);
+      return processFirstCachedChat(providerName, request);
     }
     return handleDbRestoreChat(providerName, request, conversationId, dbMessages);
   }
 
-  const diffMessages = computeDiff(cached.previousMessages, request.messages);
-  if (diffMessages.length === 0) throw new Error('No new messages');
+  const { diffMessages, divergedAt } = computeDiff(cached.previousMessages, request.messages);
+
+  // Same messages → regenerate
+  if (diffMessages.length === 0) {
+    console.log(`[CONV] No new messages for ${conversationId}, regenerating...`);
+    const provider = ensureProvider(providerName);
+    const ctx = await buildSessionContext(cached.accountId, conversationId);
+    ctx.metadata.parentMessageId = undefined;
+    ctx.metadata.conversationId = conversationId;
+
+    const response = await provider.chat(ctx, request);
+
+    if (ctx.metadata.lastResponseMessageId) {
+      updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+    }
+
+    return { response: { ...response, conversationId }, accountId: cached.accountId, conversationId };
+  }
 
   const provider = ensureProvider(providerName);
-  const ctx = await buildSessionContext(cached.accountId, conversationId);
 
+  // Branch detected: client removed cached messages, create new session
+  if (divergedAt < cached.previousMessages.length) {
+    console.log(`[CONV] Branch at index ${divergedAt}, creating new session for ${conversationId}`);
+    const ctx = await createFreshSession(cached.accountId, conversationId);
+
+    const response = await provider.chat(ctx, request);
+
+    if (ctx.metadata.lastResponseMessageId) {
+      updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+    }
+    if (ctx.metadata.lastRequestMessageId) {
+      updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
+    }
+
+    const messages = [...request.messages];
+    conversationCache.set(conversationId, { conversationId, accountId: cached.accountId, previousMessages: messages });
+    conversationModel.saveConversation(conversationId, cached.accountId, providerName, messages);
+
+    return { response: { ...response, conversationId }, accountId: cached.accountId, conversationId };
+  }
+
+  // Normal append
+  const ctx = await buildSessionContext(cached.accountId, conversationId);
   const diffRequest: InternalRequest = { ...request, messages: diffMessages };
   const response = await provider.chat(ctx, diffRequest);
 
@@ -395,19 +503,87 @@ async function processCachedChatStream(
   if (!cached) {
     const dbMessages = conversationModel.loadMessages(conversationId);
     if (!dbMessages || dbMessages.length === 0) {
-      throw new Error(`Conversation ${conversationId} not found`);
+      console.log(`[CONV] ${conversationId} not found in cache or DB, starting new cached stream`);
+      return processFirstCachedChatStream(providerName, request);
     }
     return handleDbRestoreChatStream(providerName, request, conversationId, dbMessages);
   }
 
-  const diffMessages = computeDiff(cached.previousMessages, request.messages);
-  if (diffMessages.length === 0) throw new Error('No new messages');
+  const { diffMessages, divergedAt } = computeDiff(cached.previousMessages, request.messages);
+
+  // Same messages → regenerate via edit_message
+  if (diffMessages.length === 0) {
+    const entry = getSession(conversationId);
+    const lastReqId = entry?.lastRequestMessageId;
+    if (lastReqId) {
+      console.log(`[CONV] No new messages for ${conversationId}, regenerating via edit_message id=${lastReqId}`);
+    } else {
+      console.log(`[CONV] No new messages for ${conversationId}, regenerating (no edit id, full regenerate)`);
+    }
+    const provider = ensureProvider(providerName);
+    const ctx = await buildSessionContext(cached.accountId, conversationId);
+    ctx.metadata.editMessageId = lastReqId ? Number(lastReqId) : undefined;
+    ctx.metadata.conversationId = conversationId;
+
+    const innerStream = provider.chatStream(ctx, request);
+
+    async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
+      try {
+        for await (const chunk of innerStream) {
+          yield chunk;
+        }
+      } finally {
+        if (ctx.metadata.lastResponseMessageId) {
+          updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+        }
+      }
+    }
+
+    return { stream: wrappedStream(), accountId: cached.accountId, conversationId };
+  }
 
   const provider = ensureProvider(providerName);
-  const ctx = await buildSessionContext(cached.accountId, conversationId);
 
+  // Branch detected: client removed some cached messages, need new session
+  if (divergedAt < cached.previousMessages.length) {
+    console.log(`[CONV] Branch at index ${divergedAt}, creating new session for ${conversationId}`);
+    const conv2 = cached;
+    const ctx = await createFreshSession(conv2.accountId, conversationId);
+
+    const innerStream = provider.chatStream(ctx, request);
+    const messages = [...request.messages];
+
+    async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
+      try {
+        for await (const chunk of innerStream) {
+          yield chunk;
+        }
+      } finally {
+        if (ctx.metadata.lastResponseMessageId) {
+          updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+        }
+        if (ctx.metadata.lastRequestMessageId) {
+          updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
+        }
+        conversationCache.set(conversationId, {
+          conversationId,
+          accountId: conv2.accountId,
+          previousMessages: messages,
+        });
+        conversationModel.saveConversation(conversationId, conv2.accountId, providerName, messages);
+      }
+    }
+
+    return { stream: wrappedStream(), accountId: conv2.accountId, conversationId };
+  }
+
+  // Normal append
+  const conv = cached;
+  const ctx = await buildSessionContext(conv.accountId, conversationId);
   const diffRequest: InternalRequest = { ...request, messages: diffMessages };
   const innerStream = provider.chatStream(ctx, diffRequest);
+
+  const messages = [...request.messages];
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
     try {
@@ -418,13 +594,19 @@ async function processCachedChatStream(
       if (ctx.metadata.lastResponseMessageId) {
         updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
       }
+      if (ctx.metadata.lastRequestMessageId) {
+        updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
+      }
+      conversationCache.set(conversationId, {
+        conversationId,
+        accountId: conv.accountId,
+        previousMessages: messages,
+      });
+      conversationModel.saveConversation(conversationId, conv.accountId, providerName, messages);
     }
   }
 
-  cached.previousMessages = [...request.messages];
-  conversationModel.saveConversation(conversationId, cached.accountId, providerName, cached.previousMessages);
-
-  return { stream: wrappedStream(), accountId: cached.accountId, conversationId };
+  return { stream: wrappedStream(), accountId: conv.accountId, conversationId };
 }
 
 // --- DB Restore (after server restart) ---
@@ -477,6 +659,9 @@ async function handleDbRestoreChatStream(
       if (ctx.metadata.lastResponseMessageId) {
         updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
       }
+      if (ctx.metadata.lastRequestMessageId) {
+        updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
+      }
     }
   }
 
@@ -489,8 +674,13 @@ async function handleDbRestoreChatStream(
 
 // --- Helpers ---
 
-function computeDiff(previous: InternalMessage[], current: InternalMessage[]): InternalMessage[] {
-  if (previous.length === 0) return current;
+interface DiffResult {
+  diffMessages: InternalMessage[];
+  divergedAt: number;
+}
+
+function computeDiff(previous: InternalMessage[], current: InternalMessage[]): DiffResult {
+  if (previous.length === 0) return { diffMessages: current, divergedAt: 0 };
 
   let divergeIdx = 0;
   while (
@@ -501,7 +691,7 @@ function computeDiff(previous: InternalMessage[], current: InternalMessage[]): I
     divergeIdx++;
   }
 
-  return current.slice(divergeIdx);
+  return { diffMessages: current.slice(divergeIdx), divergedAt: divergeIdx };
 }
 
 function msgEquals(a: InternalMessage, b: InternalMessage): boolean {
