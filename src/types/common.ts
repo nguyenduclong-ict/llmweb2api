@@ -75,7 +75,10 @@ export interface InternalResponse {
     inputTokens: number;
     outputTokens: number;
     reasoningTokens?: number;
+    cumulativeInputTokens?: number;
+    cumulativeOutputTokens?: number;
   };
+  conversationId?: string;
 }
 
 export interface InternalStreamChunk {
@@ -89,22 +92,9 @@ export interface InternalStreamChunk {
   usage?: {
     inputTokens: number;
     outputTokens: number;
+    cumulativeInputTokens?: number;
+    cumulativeOutputTokens?: number;
   };
-}
-
-export interface InternalResponse {
-  id: string;
-  model: string;
-  content: string;
-  reasoningContent?: string;
-  finishReason: string;
-  toolCalls?: ToolCall[];
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    reasoningTokens?: number;
-  };
-  conversationId?: string;
 }
 
 export type VendorFormat = 'openai' | 'anthropic' | 'gemini';

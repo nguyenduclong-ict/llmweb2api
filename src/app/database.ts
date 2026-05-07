@@ -7,7 +7,7 @@ type DB = InstanceType<typeof Database>;
 let db: DB;
 let dbPath: string;
 
-const LATEST_SCHEMA_VERSION = 3;
+const LATEST_SCHEMA_VERSION = 4;
 
 export async function initDatabase(customPath?: string): Promise<DB> {
   dbPath = path.resolve(customPath || process.env.DB_PATH || './data/app.db');
@@ -222,6 +222,19 @@ const migrations: Migration[] = [
         ).run();
         db.prepare('DROP TABLE conversations').run();
         db.prepare('ALTER TABLE conversations_new RENAME TO conversations').run();
+      }
+    },
+  },
+  {
+    version: 4,
+    name: 'Add token columns to conversations',
+    run: () => {
+      const cols = getTableColumns('conversations');
+      if (!cols.includes('input_tokens')) {
+        db.prepare('ALTER TABLE conversations ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0').run();
+      }
+      if (!cols.includes('output_tokens')) {
+        db.prepare('ALTER TABLE conversations ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0').run();
       }
     },
   },

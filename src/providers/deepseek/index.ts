@@ -26,6 +26,22 @@ class DeepSeekProvider implements Provider {
   private uploadedFileIds: string[] = [];
   private sentToolsHash = new Map<string, string>();
   private sentSystemPrompt = new Set<string>();
+  private conversationTokens = new Map<string, { inputTokens: number; outputTokens: number }>();
+
+  private accumulateTokens(sessionId: string, inputTokens: number, outputTokens: number): {
+    cumulativeInputTokens: number;
+    cumulativeOutputTokens: number;
+  } {
+    const prev = this.conversationTokens.get(sessionId) || { inputTokens: 0, outputTokens: 0 };
+    prev.inputTokens += inputTokens;
+    prev.outputTokens += outputTokens;
+    this.conversationTokens.set(sessionId, prev);
+    console.log(
+      `[TOKEN] session=${sessionId.slice(0, 12)} reqIn=${inputTokens} reqOut=${outputTokens} ` +
+        `cumIn=${prev.inputTokens} cumOut=${prev.outputTokens}`,
+    );
+    return { cumulativeInputTokens: prev.inputTokens, cumulativeOutputTokens: prev.outputTokens };
+  }
 
   async login(settings: Record<string, unknown>): Promise<SessionContext> {
     const email = settings.email as string;
@@ -108,6 +124,10 @@ class DeepSeekProvider implements Provider {
       reasoning = `#conversation_id:${ctx.metadata.conversationId}\n` + reasoning;
     }
 
+    const inputTokens = this.estimateTokens(prompt);
+    const outputTokens = this.estimateTokens(text);
+    const cumulative = this.accumulateTokens(ctx.sessionId, inputTokens, outputTokens);
+
     return {
       id: `ds-${Date.now()}`,
       model: request.model,
@@ -119,7 +139,7 @@ class DeepSeekProvider implements Provider {
         type: 'function' as const,
         function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
       })),
-      usage: { inputTokens: this.estimateTokens(prompt), outputTokens: this.estimateTokens(text) },
+      usage: { inputTokens, outputTokens, ...cumulative },
     };
   }
 
@@ -246,12 +266,14 @@ class DeepSeekProvider implements Provider {
 
       this.uploadedFileIds = [];
 
+      const editInputTokens = this.estimateTokens(msgContent);
+      const editCumulative = this.accumulateTokens(ctx.sessionId, editInputTokens, totalTokens);
       yield {
         id: streamId,
         model: request.model,
         content: '',
         finishReason: hasToolCalls ? 'tool_calls' : 'stop',
-        usage: { inputTokens: this.estimateTokens(msgContent), outputTokens: totalTokens },
+        usage: { inputTokens: editInputTokens, outputTokens: totalTokens, ...editCumulative },
       };
       return;
     }
@@ -381,18 +403,21 @@ class DeepSeekProvider implements Provider {
 
     this.uploadedFileIds = [];
 
+    const normInputTokens = this.estimateTokens(prompt);
+    const normCumulative = this.accumulateTokens(ctx.sessionId, normInputTokens, totalTokens);
     yield {
       id: streamId,
       model: request.model,
       content: '',
       finishReason: hasToolCalls ? 'tool_calls' : 'stop',
-      usage: { inputTokens: this.estimateTokens(prompt), outputTokens: totalTokens },
+      usage: { inputTokens: normInputTokens, outputTokens: totalTokens, ...normCumulative },
     };
   }
 
   async dispose(ctx: SessionContext): Promise<void> {
     this.sentSystemPrompt.delete(ctx.sessionId);
     this.sentToolsHash.delete(ctx.sessionId);
+    this.conversationTokens.delete(ctx.sessionId);
     try {
       await client.deleteSession(ctx.token, ctx.sessionId);
     } catch {
@@ -668,7 +693,7 @@ function parseContent(chunk: Record<string, unknown>, currentFragmentType: strin
 }
 
 function hasText(s: unknown): s is string {
-  return typeof s === 'string' && s.trim().length > 0;
+  return typeof s === 'string' && s.length > 0;
 }
 
 function extractTextValue(v: unknown): string {

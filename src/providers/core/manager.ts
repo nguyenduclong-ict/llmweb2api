@@ -371,7 +371,11 @@ async function processFirstCachedChat(
     accountId: account.itemId,
     previousMessages: messages,
   });
-  conversationModel.saveConversation(ctx.sessionId, account.itemId, providerName, messages);
+  conversationModel.saveConversation(
+    ctx.sessionId, account.itemId, providerName, messages,
+    response.usage.cumulativeInputTokens,
+    response.usage.cumulativeOutputTokens,
+  );
 
   return {
     response: { ...response, conversationId: ctx.sessionId },
@@ -395,8 +399,14 @@ async function processFirstCachedChatStream(
   const messages = [...request.messages];
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
+    let cumInput: number | undefined;
+    let cumOutput: number | undefined;
     try {
       for await (const chunk of innerStream) {
+        if (chunk.usage?.cumulativeInputTokens != null) {
+          cumInput = chunk.usage.cumulativeInputTokens;
+          cumOutput = chunk.usage.cumulativeOutputTokens;
+        }
         yield chunk;
       }
     } finally {
@@ -411,7 +421,7 @@ async function processFirstCachedChatStream(
         accountId: account.itemId,
         previousMessages: messages,
       });
-      conversationModel.saveConversation(ctx.sessionId, account.itemId, providerName, messages);
+      conversationModel.saveConversation(ctx.sessionId, account.itemId, providerName, messages, cumInput, cumOutput);
     }
   }
 
@@ -473,7 +483,11 @@ async function processCachedChat(
 
     const messages = [...request.messages];
     conversationCache.set(conversationId, { conversationId, accountId: cached.accountId, previousMessages: messages });
-    conversationModel.saveConversation(conversationId, cached.accountId, providerName, messages);
+    conversationModel.saveConversation(
+      conversationId, cached.accountId, providerName, messages,
+      response.usage.cumulativeInputTokens,
+      response.usage.cumulativeOutputTokens,
+    );
 
     return { response: { ...response, conversationId }, accountId: cached.accountId, conversationId };
   }
@@ -488,7 +502,11 @@ async function processCachedChat(
   }
 
   cached.previousMessages = [...request.messages];
-  conversationModel.saveConversation(conversationId, cached.accountId, providerName, cached.previousMessages);
+  conversationModel.saveConversation(
+    conversationId, cached.accountId, providerName, cached.previousMessages,
+    response.usage.cumulativeInputTokens,
+    response.usage.cumulativeOutputTokens,
+  );
 
   return { response: { ...response, conversationId }, accountId: cached.accountId, conversationId };
 }
@@ -526,20 +544,29 @@ async function processCachedChatStream(
     ctx.metadata.conversationId = conversationId;
 
     const innerStream = provider.chatStream(ctx, request);
+    const messages = [...request.messages];
+    const accountId = cached.accountId;
 
     async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
+      let cumInput: number | undefined;
+      let cumOutput: number | undefined;
       try {
         for await (const chunk of innerStream) {
+          if (chunk.usage?.cumulativeInputTokens != null) {
+            cumInput = chunk.usage.cumulativeInputTokens;
+            cumOutput = chunk.usage.cumulativeOutputTokens;
+          }
           yield chunk;
         }
       } finally {
         if (ctx.metadata.lastResponseMessageId) {
           updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
         }
+        conversationModel.saveConversation(conversationId, accountId, providerName, messages, cumInput, cumOutput);
       }
     }
 
-    return { stream: wrappedStream(), accountId: cached.accountId, conversationId };
+    return { stream: wrappedStream(), accountId, conversationId };
   }
 
   const provider = ensureProvider(providerName);
@@ -554,8 +581,14 @@ async function processCachedChatStream(
     const messages = [...request.messages];
 
     async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
+      let cumInput: number | undefined;
+      let cumOutput: number | undefined;
       try {
         for await (const chunk of innerStream) {
+          if (chunk.usage?.cumulativeInputTokens != null) {
+            cumInput = chunk.usage.cumulativeInputTokens;
+            cumOutput = chunk.usage.cumulativeOutputTokens;
+          }
           yield chunk;
         }
       } finally {
@@ -570,7 +603,7 @@ async function processCachedChatStream(
           accountId: conv2.accountId,
           previousMessages: messages,
         });
-        conversationModel.saveConversation(conversationId, conv2.accountId, providerName, messages);
+        conversationModel.saveConversation(conversationId, conv2.accountId, providerName, messages, cumInput, cumOutput);
       }
     }
 
@@ -586,8 +619,14 @@ async function processCachedChatStream(
   const messages = [...request.messages];
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
+    let cumInput: number | undefined;
+    let cumOutput: number | undefined;
     try {
       for await (const chunk of innerStream) {
+        if (chunk.usage?.cumulativeInputTokens != null) {
+          cumInput = chunk.usage.cumulativeInputTokens;
+          cumOutput = chunk.usage.cumulativeOutputTokens;
+        }
         yield chunk;
       }
     } finally {
@@ -602,7 +641,7 @@ async function processCachedChatStream(
         accountId: conv.accountId,
         previousMessages: messages,
       });
-      conversationModel.saveConversation(conversationId, conv.accountId, providerName, messages);
+      conversationModel.saveConversation(conversationId, conv.accountId, providerName, messages, cumInput, cumOutput);
     }
   }
 
@@ -631,7 +670,11 @@ async function handleDbRestoreChat(
 
   const messages = [...request.messages];
   conversationCache.set(conversationId, { conversationId, accountId: account.itemId, previousMessages: messages });
-  conversationModel.saveConversation(conversationId, account.itemId, providerName, messages);
+  conversationModel.saveConversation(
+    conversationId, account.itemId, providerName, messages,
+    response.usage.cumulativeInputTokens,
+    response.usage.cumulativeOutputTokens,
+  );
 
   return { response: { ...response, conversationId }, accountId: account.itemId, conversationId };
 }
@@ -649,10 +692,17 @@ async function handleDbRestoreChatStream(
   saveSession(conversationId, ctx.sessionId, account.itemId);
 
   const innerStream = provider.chatStream(ctx, request);
+  const messages = [...request.messages];
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
+    let cumInput: number | undefined;
+    let cumOutput: number | undefined;
     try {
       for await (const chunk of innerStream) {
+        if (chunk.usage?.cumulativeInputTokens != null) {
+          cumInput = chunk.usage.cumulativeInputTokens;
+          cumOutput = chunk.usage.cumulativeOutputTokens;
+        }
         yield chunk;
       }
     } finally {
@@ -662,12 +712,10 @@ async function handleDbRestoreChatStream(
       if (ctx.metadata.lastRequestMessageId) {
         updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
       }
+      conversationCache.set(conversationId, { conversationId, accountId: account.itemId, previousMessages: messages });
+      conversationModel.saveConversation(conversationId, account.itemId, providerName, messages, cumInput, cumOutput);
     }
   }
-
-  const messages = [...request.messages];
-  conversationCache.set(conversationId, { conversationId, accountId: account.itemId, previousMessages: messages });
-  conversationModel.saveConversation(conversationId, account.itemId, providerName, messages);
 
   return { stream: wrappedStream(), accountId: account.itemId, conversationId };
 }

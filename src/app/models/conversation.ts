@@ -6,6 +6,8 @@ export interface ConversationRecord {
   account_id: number | null;
   provider: string;
   messages: string;
+  input_tokens: number;
+  output_tokens: number;
   created_at: string;
   updated_at: string;
 }
@@ -19,22 +21,30 @@ export function saveConversation(
   accountId: number,
   providerName: string,
   messages: InternalMessage[],
+  inputTokens?: number,
+  outputTokens?: number,
 ): void {
   const json = JSON.stringify(messages);
   const existing = getByConversationId(conversationId);
   if (existing) {
+    const inTok = inputTokens ?? existing.input_tokens;
+    const outTok = outputTokens ?? existing.output_tokens;
     prepareAndRun(
-      "UPDATE conversations SET account_id = ?, provider = ?, messages = ?, updated_at = datetime('now') WHERE conversation_id = ?",
-      [accountId, providerName, json, conversationId],
+      "UPDATE conversations SET account_id = ?, provider = ?, messages = ?, input_tokens = ?, output_tokens = ?, updated_at = datetime('now') WHERE conversation_id = ?",
+      [accountId, providerName, json, inTok, outTok, conversationId],
     );
   } else {
-    prepareAndRun('INSERT INTO conversations (conversation_id, account_id, provider, messages) VALUES (?, ?, ?, ?)', [
-      conversationId,
-      accountId,
-      providerName,
-      json,
-    ]);
+    prepareAndRun(
+      'INSERT INTO conversations (conversation_id, account_id, provider, messages, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?)',
+      [conversationId, accountId, providerName, json, inputTokens ?? 0, outputTokens ?? 0],
+    );
   }
+}
+
+export function loadTokenStats(conversationId: string): { inputTokens: number; outputTokens: number } | undefined {
+  const row = getByConversationId(conversationId);
+  if (!row) return undefined;
+  return { inputTokens: row.input_tokens ?? 0, outputTokens: row.output_tokens ?? 0 };
 }
 
 export function loadMessages(conversationId: string): InternalMessage[] | undefined {

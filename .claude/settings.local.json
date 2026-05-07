@@ -20,7 +20,8 @@
       "Bash(npx tsx *)",
       "Bash(pnpm add *)",
       "Bash(Select-Object -First 20)",
-      "PowerShell(npx tsc --noEmit 2>&1)"
+      "PowerShell(npx tsc --noEmit 2>&1)",
+      "PowerShell($lines = Get-Content \"c:\\\\Users\\\\ADMIN\\\\Desktop\\\\Code\\\\chat2api\\\\llmweb2api\\\\src\\\\app\\\\database.ts\"; for \\($i = 226; $i -le 231; $i++\\) { $bytes = [System.Text.Encoding]::UTF8.GetBytes\\($lines[$i]\\); $hex = \\($bytes | ForEach-Object { $_.ToString\\('X2'\\) }\\) -join ' '; Write-Output \"L$\\($i+1\\): $hex\" })"
     ]
   }
 }

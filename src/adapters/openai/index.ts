@@ -109,10 +109,12 @@ export const openaiAdapter: Adapter = {
       message.content = internal.content;
     }
 
+    const inTok = internal.usage.cumulativeInputTokens ?? internal.usage.inputTokens;
+    const outTok = internal.usage.cumulativeOutputTokens ?? internal.usage.outputTokens;
     const usage: Record<string, unknown> = {
-      prompt_tokens: internal.usage.inputTokens,
-      completion_tokens: internal.usage.outputTokens,
-      total_tokens: internal.usage.inputTokens + internal.usage.outputTokens,
+      prompt_tokens: inTok,
+      completion_tokens: outTok,
+      total_tokens: inTok + outTok,
     };
 
     if (internal.usage.reasoningTokens !== undefined) {
@@ -178,10 +180,12 @@ export const openaiAdapter: Adapter = {
     };
 
     if (chunk.usage) {
+      const inTok = chunk.usage.cumulativeInputTokens ?? chunk.usage.inputTokens;
+      const outTok = chunk.usage.cumulativeOutputTokens ?? chunk.usage.outputTokens;
       data.usage = {
-        prompt_tokens: chunk.usage.inputTokens,
-        completion_tokens: chunk.usage.outputTokens,
-        total_tokens: chunk.usage.inputTokens + chunk.usage.outputTokens,
+        prompt_tokens: inTok,
+        completion_tokens: outTok,
+        total_tokens: inTok + outTok,
       };
     }
 
