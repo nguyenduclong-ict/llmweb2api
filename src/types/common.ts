@@ -95,6 +95,7 @@ export interface InternalStreamChunk {
     cumulativeInputTokens?: number;
     cumulativeOutputTokens?: number;
   };
+  conversationId?: string;
 }
 
 export type VendorFormat = 'openai' | 'anthropic' | 'gemini';

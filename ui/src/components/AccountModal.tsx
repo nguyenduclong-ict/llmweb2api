@@ -1,17 +1,10 @@
-import { useEffect, useState } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "./ui/dialog";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { Label } from "./ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { Textarea } from "./ui/textarea";
+import { useEffect, useState } from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Textarea } from './ui/textarea';
 
 interface Account {
   id: number;
@@ -30,23 +23,23 @@ interface AccountModalProps {
   onSave: (data: any) => Promise<void>;
 }
 
-const PROVIDER_TYPES = ["deepseek", "chatgpt"];
+const PROVIDER_TYPES = ['deepseek', 'chatgpt'];
 
 export function AccountModal({ open, onOpenChange, editingAccount, onSave }: AccountModalProps) {
-  const [name, setName] = useState("");
-  const [provider, setProvider] = useState("deepseek");
-  const [settings, setSettings] = useState("{}");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [name, setName] = useState('');
+  const [provider, setProvider] = useState('deepseek');
+  const [settings, setSettings] = useState('{}');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
 
   const resetForm = () => {
-    setName("");
-    setProvider("deepseek");
-    setSettings("{}");
-    setEmail("");
-    setPassword("");
-    setError("");
+    setName('');
+    setProvider('deepseek');
+    setSettings('{}');
+    setEmail('');
+    setPassword('');
+    setError('');
   };
 
   useEffect(() => {
@@ -55,14 +48,14 @@ export function AccountModal({ open, onOpenChange, editingAccount, onSave }: Acc
       setProvider(editingAccount.provider);
       try {
         const parsed = JSON.parse(editingAccount.settings);
-        if (editingAccount.provider === "deepseek") {
-          setEmail(parsed.email || "");
-          setPassword(parsed.password || "");
-          setSettings("{}");
+        if (editingAccount.provider === 'deepseek') {
+          setEmail(parsed.email || '');
+          setPassword(parsed.password || '');
+          setSettings('{}');
         } else {
           setSettings(editingAccount.settings);
-          setEmail("");
-          setPassword("");
+          setEmail('');
+          setPassword('');
         }
       } catch {
         setSettings(editingAccount.settings);
@@ -74,31 +67,31 @@ export function AccountModal({ open, onOpenChange, editingAccount, onSave }: Acc
 
   const handleProviderChange = (value: string) => {
     setProvider(value);
-    setEmail("");
-    setPassword("");
-    setSettings("{}");
-    setError("");
+    setEmail('');
+    setPassword('');
+    setSettings('{}');
+    setError('');
   };
 
   const handleSave = async () => {
     if (!name.trim()) return;
 
     let settingsData: Record<string, unknown>;
-    if (provider === "deepseek") {
+    if (provider === 'deepseek') {
       if (!email.trim()) {
-        setError("Email is required");
+        setError('Email is required');
         return;
       }
       if (!password.trim()) {
-        setError("Password is required");
+        setError('Password is required');
         return;
       }
-      settingsData = { type: "email+password", email: email.trim(), password };
+      settingsData = { type: 'email+password', email: email.trim(), password };
     } else {
       try {
         settingsData = JSON.parse(settings);
       } catch {
-        setError("Invalid JSON");
+        setError('Invalid JSON');
         return;
       }
     }
@@ -112,9 +105,9 @@ export function AccountModal({ open, onOpenChange, editingAccount, onSave }: Acc
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>{editingAccount ? "Edit Account" : "Add New Account"}</DialogTitle>
+          <DialogTitle>{editingAccount ? 'Edit Account' : 'Add New Account'}</DialogTitle>
           <DialogDescription>
-            {editingAccount ? "Update account details below." : "Fill in the account information."}
+            {editingAccount ? 'Update account details below.' : 'Fill in the account information.'}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
@@ -137,7 +130,7 @@ export function AccountModal({ open, onOpenChange, editingAccount, onSave }: Acc
               </SelectContent>
             </Select>
           </div>
-          {provider === "deepseek" ? (
+          {provider === 'deepseek' ? (
             <>
               <div className="grid gap-2">
                 <Label htmlFor="email">Email</Label>
@@ -156,7 +149,7 @@ export function AccountModal({ open, onOpenChange, editingAccount, onSave }: Acc
                 value={settings}
                 onChange={(e) => {
                   setSettings(e.target.value);
-                  setError("");
+                  setError('');
                 }}
                 rows={6}
                 className="font-mono text-sm"
@@ -169,7 +162,7 @@ export function AccountModal({ open, onOpenChange, editingAccount, onSave }: Acc
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSave}>{editingAccount ? "Update" : "Save"}</Button>
+          <Button onClick={handleSave}>{editingAccount ? 'Update' : 'Save'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

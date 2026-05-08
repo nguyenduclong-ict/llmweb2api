@@ -1,16 +1,9 @@
-import { useEffect, useState } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "./ui/dialog";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { Label } from "./ui/label";
-import { Switch } from "./ui/switch";
+import { useEffect, useState } from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Switch } from './ui/switch';
 
 interface ApiKey {
   id: number;
@@ -30,14 +23,14 @@ interface ApiKeyModalProps {
 }
 
 export function ApiKeyModal({ open, onOpenChange, editingKey, onSave, onKeyGenerated }: ApiKeyModalProps) {
-  const [name, setName] = useState("");
-  const [key, setKey] = useState("");
-  const [cache, setCache] = useState(false);
+  const [name, setName] = useState('');
+  const [key, setKey] = useState('');
+  const [cache, setCache] = useState(true);
 
   const resetForm = () => {
-    setName("");
-    setKey("");
-    setCache(false);
+    setName('');
+    setKey('');
+    setCache(true);
   };
 
   useEffect(() => {
@@ -50,16 +43,18 @@ export function ApiKeyModal({ open, onOpenChange, editingKey, onSave, onKeyGener
   }, [editingKey, open]);
 
   const generateKey = () => {
-    const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-    let newKey = "sk-";
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let newKey = 'sk-';
     for (let i = 0; i < 48; i++) newKey += chars[Math.floor(Math.random() * chars.length)];
     setKey(newKey);
   };
 
   const handleSave = async () => {
     if (!name.trim()) return;
-    const result = await onSave(editingKey ? { name: name.trim(), cache } : { name: name.trim(), key: key || undefined, cache });
-    if (!editingKey && result && "key" in result && onKeyGenerated) {
+    const result = await onSave(
+      editingKey ? { name: name.trim(), cache } : { name: name.trim(), key: key || undefined, cache },
+    );
+    if (!editingKey && result && 'key' in result && onKeyGenerated) {
       onKeyGenerated(result.key);
     }
     onOpenChange(false);
@@ -70,9 +65,9 @@ export function ApiKeyModal({ open, onOpenChange, editingKey, onSave, onKeyGener
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>{editingKey ? "Edit API Key" : "Create New API Key"}</DialogTitle>
+          <DialogTitle>{editingKey ? 'Edit API Key' : 'Create New API Key'}</DialogTitle>
           <DialogDescription>
-            {editingKey ? "Update API key details below." : "Create a new API key for authentication."}
+            {editingKey ? 'Update API key details below.' : 'Create a new API key for authentication.'}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
@@ -106,7 +101,7 @@ export function ApiKeyModal({ open, onOpenChange, editingKey, onSave, onKeyGener
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSave}>{editingKey ? "Update" : "Create"}</Button>
+          <Button onClick={handleSave}>{editingKey ? 'Update' : 'Create'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

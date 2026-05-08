@@ -1,62 +1,51 @@
-import { KPICards } from "../components/charts/KPICards";
-import RequestVolumeChart from "../components/charts/RequestVolumeChart";
-import StatusCodePieChart from "../components/charts/StatusCodePieChart";
-import EndpointLatencyChart from "../components/charts/EndpointLatencyChart";
-import RouteTrafficChart from "../components/charts/RouteTrafficChart";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { useState, useMemo, useCallback } from 'react';
+import { KPICards } from '../components/charts/KPICards';
+import RequestStatusLineChart from '../components/charts/RequestStatusLineChart';
+import TokenUsageChart from '../components/charts/TokenUsageChart';
+import DateRangeSelector from '../components/charts/DateRangeSelector';
+import { type DateRangePreset, getDateRange, getGranularityForRange } from '../components/charts/dateRangeUtils';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 
 export default function Analysis() {
+  const [preset, setPreset] = useState<DateRangePreset>('today');
+
+  const handlePresetChange = useCallback((p: DateRangePreset) => {
+    setPreset(p);
+  }, []);
+
+  const { startDate, endDate } = useMemo(() => getDateRange(preset), [preset]);
+  const granularity = useMemo(() => getGranularityForRange(preset), [preset]);
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Analysis</h1>
-        <p className="text-muted-foreground">
-          API performance, traffic, and system health overview
-        </p>
+    <div className='space-y-6'>
+      <div className='flex items-center justify-between flex-wrap gap-4'>
+        <div>
+          <h1 className='text-3xl font-bold tracking-tight'>Analysis</h1>
+          <p className='text-muted-foreground'>API performance, traffic, and system health overview</p>
+        </div>
+        <DateRangeSelector value={preset} onChange={handlePresetChange} />
       </div>
 
-      {/* KPI Cards Row */}
       <KPICards />
 
-      {/* Row 1: Line Chart + Pie Chart */}
-      <div className="grid gap-6 lg:grid-cols-7">
-        <Card className="lg:col-span-4">
+      <div className='grid gap-6 lg:grid-cols-2'>
+        <Card>
           <CardHeader>
-            <CardTitle>Request Volume Over Time</CardTitle>
+            <CardTitle>Requests and Errors Over Time</CardTitle>
           </CardHeader>
           <CardContent>
-            <RequestVolumeChart />
+            <RequestStatusLineChart startDate={startDate} endDate={endDate} granularity={granularity} />
           </CardContent>
         </Card>
-        <Card className="lg:col-span-3">
+        <Card>
           <CardHeader>
-            <CardTitle>Status Code Distribution</CardTitle>
+            <CardTitle>Token Usage Over Time</CardTitle>
           </CardHeader>
           <CardContent>
-            <StatusCodePieChart />
+            <TokenUsageChart startDate={startDate} endDate={endDate} granularity={granularity} />
           </CardContent>
         </Card>
       </div>
-
-      {/* Row 2: Bar Chart Full Width */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Response Time by Endpoint (ms)</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <EndpointLatencyChart />
-        </CardContent>
-      </Card>
-
-      {/* Row 3: Stacked Area Chart Full Width */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Traffic by Route Group</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <RouteTrafficChart />
-        </CardContent>
-      </Card>
     </div>
   );
 }

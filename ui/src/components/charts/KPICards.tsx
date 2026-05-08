@@ -1,66 +1,106 @@
-import { kpiData, formatNumber } from "../../data/mockData";
-import { Activity, Clock, AlertTriangle, CheckCircle2, TrendingUp, TrendingDown } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
+import { useState, useEffect } from 'react';
+import { apiGet } from '../../api/client';
+import { Activity, Clock, AlertTriangle, Coins, TrendingUp, TrendingDown } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 
-function TrendIndicator({
-  value,
-  /** Positive means good (e.g., uptime, total requests), negative means good (e.g., latency, errors) */
-  inverted = false,
-}: {
-  value: number;
-  inverted?: boolean;
-}) {
+function formatNumber(num: number): string {
+  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
+  if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
+  return num.toString();
+}
+
+function TrendIndicator({ value, inverted = false }: { value: number; inverted?: boolean }) {
   const isUp = value >= 0;
   const isGood = inverted ? !isUp : isUp;
   const TrendIcon = isUp ? TrendingUp : TrendingDown;
-  const colorClass = isGood ? "text-green-500" : "text-red-500";
-  const prefix = isUp ? "+" : "";
+  const colorClass = isGood ? 'text-green-500' : 'text-red-500';
+  const prefix = isUp ? '+' : '';
 
   return (
     <span className={`inline-flex items-center gap-0.5 text-xs font-medium ${colorClass}`}>
       <TrendIcon className="h-3 w-3" />
-      {prefix}{value}%
+      {prefix}
+      {value}%
     </span>
   );
 }
 
+interface KpiData {
+  totalRequests: number;
+  totalRequestsChange: number;
+  p95Latency: number;
+  p95LatencyChange: number;
+  errorRate: number;
+  errorRateChange: number;
+  tokensUsed: number;
+  tokensUsedChange: number;
+}
+
+const PLACEHOLDER_TITLES = ['Total Requests', 'P95 Latency', 'Error Rate', 'Tokens Used'];
+
 export function KPICards() {
+  const [data, setData] = useState<KpiData | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    apiGet<KpiData>('/api/stats/kpi')
+      .then(setData)
+      .catch(() => setError(true));
+  }, []);
+
+  if (error || !data) {
+    return (
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {PLACEHOLDER_TITLES.map((title) => (
+          <Card key={title}>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">{title}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-muted-foreground">--</div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
   const cards = [
     {
-      title: "Total Requests",
-      value: formatNumber(kpiData.totalRequests),
-      subtitle: "vs yesterday",
+      title: 'Total Requests',
+      value: formatNumber(data.totalRequests),
+      subtitle: '',
       icon: Activity,
-      color: "text-blue-500",
-      trend: kpiData.totalRequestsChange,
+      color: 'text-blue-500',
+      trend: data.totalRequestsChange,
       inverted: false,
     },
     {
-      title: "P95 Latency",
-      value: `${kpiData.p95Latency} ms`,
-      subtitle: "vs yesterday",
+      title: 'Tokens Used',
+      value: formatNumber(data.tokensUsed),
+      subtitle: '',
+      icon: Coins,
+      color: 'text-purple-500',
+      trend: data.tokensUsedChange,
+      inverted: false,
+    },
+    {
+      title: 'P95 Latency',
+      value: `${data.p95Latency} ms`,
+      subtitle: '',
       icon: Clock,
-      color: "text-amber-500",
-      trend: kpiData.p95LatencyChange,
+      color: 'text-amber-500',
+      trend: data.p95LatencyChange,
       inverted: true,
     },
     {
-      title: "Error Rate",
-      value: `${kpiData.errorRate}%`,
-      subtitle: "vs yesterday",
+      title: 'Error Rate',
+      value: `${data.errorRate}%`,
+      subtitle: '',
       icon: AlertTriangle,
-      color: "text-red-500",
-      trend: kpiData.errorRateChange,
+      color: 'text-red-500',
+      trend: data.errorRateChange,
       inverted: true,
-    },
-    {
-      title: "Uptime",
-      value: `${kpiData.uptime}%`,
-      subtitle: "vs yesterday",
-      icon: CheckCircle2,
-      color: "text-green-500",
-      trend: kpiData.uptimeChange,
-      inverted: false,
     },
   ];
 

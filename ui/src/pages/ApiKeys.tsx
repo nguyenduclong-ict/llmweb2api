@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
-import { apiGet, apiPost, apiPut, apiDelete } from "../api/client";
-import { Button } from "../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { ApiKeyModal } from "../components/ApiKeyModal";
-import { Plus, Pencil, Power, Trash2, Copy, Check } from "lucide-react";
+import { useEffect, useState } from 'react';
+import { apiGet, apiPost, apiPut, apiDelete } from '../api/client';
+import { Button } from '../components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { ApiKeyModal } from '../components/ApiKeyModal';
+import { Plus, Pencil, Power, Trash2, Copy, Check } from 'lucide-react';
 
 interface ApiKey {
   id: number;
@@ -26,7 +26,7 @@ export default function ApiKeys() {
   }, []);
 
   async function loadKeys() {
-    const data = await apiGet<ApiKey[]>("/api/api-keys");
+    const data = await apiGet<ApiKey[]>('/api/api-keys');
     setKeys(data);
   }
 
@@ -34,7 +34,7 @@ export default function ApiKeys() {
     if (editingKey) {
       await apiPut(`/api/api-keys/${editingKey.id}`, data);
     } else {
-      return await apiPost<ApiKey>("/api/api-keys", data);
+      return await apiPost<ApiKey>('/api/api-keys', data);
     }
     await loadKeys();
   }
@@ -45,7 +45,7 @@ export default function ApiKeys() {
   }
 
   async function handleDelete(id: number) {
-    if (confirm("Are you sure you want to delete this API key?")) {
+    if (confirm('Are you sure you want to delete this API key?')) {
       await apiDelete(`/api/api-keys/${id}`);
       await loadKeys();
     }
@@ -118,14 +118,14 @@ export default function ApiKeys() {
                       </Button>
                     </div>
                   </TableCell>
-                  <TableCell>{k.cache ? "Yes" : "No"}</TableCell>
+                  <TableCell>{k.cache ? 'Yes' : 'No'}</TableCell>
                   <TableCell>
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
-                        k.enabled ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                        k.enabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
                       }`}
                     >
-                      {k.enabled ? "Active" : "Disabled"}
+                      {k.enabled ? 'Active' : 'Disabled'}
                     </span>
                   </TableCell>
                   <TableCell className="text-sm">{new Date(k.created_at).toLocaleDateString()}</TableCell>

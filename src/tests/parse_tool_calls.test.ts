@@ -1,5 +1,5 @@
-// Run: npx tsx tests/parse_tool_calls.test.ts
-import { parseToolCallBlock, parseToolCallXML } from '../providers/deepseek/tool_parser';
+﻿// Run: npx tsx tests/parse_tool_calls.test.ts
+import { parseToolCallBlock, parseToolCallXML } from '../providers/core/tool_parser';
 
 let passed = 0;
 let failed = 0;
@@ -26,7 +26,7 @@ function assertEq<T>(actual: T, expected: T, msg: string) {
   }
 }
 
-// ── Test cases ─────────────────────────────────────────────────────
+// â”€â”€ Test cases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 console.log('\n=== 1. YAML format with ```yaml fence ===');
 const r1 = parseToolCallXML(`
@@ -154,7 +154,7 @@ arguments:
 assertEq(r9.length, 1, '1 tool call from block YAML');
 assertEq(r9[0].name, 'block_fn', 'name from block');
 
-console.log('\n=== 10. Empty fence → no results ===');
+console.log('\n=== 10. Empty fence â†’ no results ===');
 const r10 = parseToolCallXML(`
 [#llmweb2api:tool_call]
 \`\`\`yaml
@@ -163,7 +163,7 @@ const r10 = parseToolCallXML(`
 `);
 assertEq(r10.length, 0, '0 tool calls for empty fence');
 
-console.log('\n=== 11. Invalid YAML in fence → no results ===');
+console.log('\n=== 11. Invalid YAML in fence â†’ no results ===');
 const r11 = parseToolCallXML(`
 [#llmweb2api:tool_call]
 \`\`\`yaml
@@ -173,7 +173,7 @@ const r11 = parseToolCallXML(`
 `);
 assertEq(r11.length, 0, '0 tool calls for invalid YAML');
 
-console.log('\n=== 12. Garbage text → no results ===');
+console.log('\n=== 12. Garbage text â†’ no results ===');
 const r12 = parseToolCallXML('not yaml at all just some text');
 assertEq(r12.length, 0, '0 tool calls for garbage');
 
@@ -244,7 +244,7 @@ const r17 = parseToolCallXML(`
 assertEq(r17.length, 1, '1 tool call from JSON in bare fence');
 assertEq(r17[0].name, 'json_bare_fence', 'name from JSON in bare fence');
 
-console.log('\n=== 18. Missing closing marker → implicit close at next block ===');
+console.log('\n=== 18. Missing closing marker â†’ implicit close at next block ===');
 const r18 = parseToolCallXML(`
 [#llmweb2api:tool_call]
 \`\`\`yaml
@@ -325,6 +325,90 @@ some model text that shouldn't be here
 assertEq(r21.length, 1, '1 tool call despite trailing text in body');
 assertEq(r21[0].name, 'read_fn', 'parsed correctly despite trailing garbage');
 
+console.log('\n=== 22. YAML with unindented continuation line ===');
+const r22 = parseToolCallXML(`
+[#llmweb2api:tool_call]
+
+name: edit
+arguments:
+  filePath: C:\\Users\\ADMIN\\Desktop\\Code\\test.ts
+  oldString: import { statsRoutes } from './routes/stats';
+  newString: import { statsRoutes } from './routes/stats';
+import { analyticsRoutes } from './routes/analytics';
+
+[$llmweb2api:tool_call]
+`);
+assertEq(r22.length, 1, '1 tool call despite unindented continuation');
+assertEq(r22[0].name, 'edit', 'name: edit');
+assertEq(r22[0].arguments.filePath, 'C:\\Users\\ADMIN\\Desktop\\Code\\test.ts', 'filePath preserved');
+const ns = r22[0].arguments.newString as string;
+assert(ns.includes('analyticsRoutes'), 'newString: contains analyticsRoutes');
+assert(ns.includes('statsRoutes'), 'newString: contains statsRoutes');
+
 console.log(`\n${'='.repeat(40)}`);
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
+
+  console.log('\n=== 23. Bare YAML with double-quoted Windows path (model output format) ===');
+  const r23 = parseToolCallXML("\n[#llmweb2api:tool_call]\n\nname: read\narguments:\n  filePath: \"C:\\Users\\ADMIN\\Desktop\\Code\\chat2api\\llmweb2api\\ui\\src\\components\\charts\\TokenUsageChart.tsx\"\n\n[$llmweb2api:tool_call]\n");
+  assertEq(r23.length, 1, '1 tool call from double-quoted Windows path');
+  assertEq(r23[0].name, 'read', 'name: read');
+  assertEq(r23[0].arguments.filePath, 'C:\\Users\\ADMIN\\Desktop\\Code\\chat2api\\llmweb2api\\ui\\src\\components\\charts\\TokenUsageChart.tsx', 'double-quoted windows path preserved');
+
+  console.log('\n=== 24. Multiple bare YAML blocks with double-quoted Windows paths ===');
+  const r24 = parseToolCallXML("\n[#llmweb2api:tool_call]\n\nname: read\narguments:\n  filePath: \"C:\\Users\\ADMIN\\Desktop\\Code\\chat2api\\llmweb2api\\ui\\src\\components\\charts\\TokenUsageChart.tsx\"\n\n[#llmweb2api:tool_call]\n\nname: read\narguments:\n  filePath: \"C:\\Users\\ADMIN\\Desktop\\Code\\chat2api\\llmweb2api\\ui\\src\\components\\charts\\RouteTrafficChart.tsx\"\n\n[$llmweb2api:tool_call]\n");
+  assertEq(r24.length, 2, '2 tool calls from multi bare YAML');
+  assertEq(r24[0].name, 'read', 'first name');
+  assertEq(r24[1].name, 'read', 'second name');
+  assert(typeof r24[0].arguments.filePath === 'string', 'first filePath is string');
+  assert(typeof r24[1].arguments.filePath === 'string', 'second filePath is string');
+
+  console.log('\n=== 25. Block markers inside old_string/new_string values (YAML | scalar) ===');
+  const r25 = parseToolCallXML(`
+[#llmweb2api:tool_call]
+\`\`\`yaml
+name: edit
+arguments:
+  filePath: test.ts
+  old_string: |
+    [#llmweb2api:system]
+    hello world
+    [$llmweb2api:system]
+  new_string: |
+    [#llmweb2api:system]
+    new hello world
+    [$llmweb2api:system]
+\`\`\`
+[$llmweb2api:tool_call]
+`);
+  assertEq(r25.length, 1, '1 tool call despite markers inside values');
+  assertEq(r25[0].name, 'edit', 'name: edit');
+  const a25 = r25[0].arguments;
+  assert(typeof a25.old_string === 'string', 'old_string is string');
+  assert(typeof a25.new_string === 'string', 'new_string is string');
+  if (typeof a25.old_string === 'string') {
+    assert(a25.old_string.includes('[#llmweb2api:system]'), 'old_string preserves [#llmweb2api:system]');
+    assert(a25.old_string.includes('[$llmweb2api:system]'), 'old_string preserves [$llmweb2api:system]');
+  }
+
+  console.log('\n=== 26. Nested tool_call markers inside values should not disrupt parsing ===');
+  const r26 = parseToolCallXML(`
+[#llmweb2api:tool_call]
+\`\`\`yaml
+name: edit
+arguments:
+  old_string: |
+    [#llmweb2api:tool_call]
+    some_code();
+    [$llmweb2api:tool_call]
+  new_string: |
+    [#llmweb2api:tool_call]
+    new_code();
+    [$llmweb2api:tool_call]
+\`\`\`
+[$llmweb2api:tool_call]
+`);
+  assertEq(r26.length, 1, '1 tool call despite nested markers in values');
+  assertEq(r26[0].name, 'edit', 'name: edit despite nested markers');
+
 if (failed > 0) process.exit(1);
+

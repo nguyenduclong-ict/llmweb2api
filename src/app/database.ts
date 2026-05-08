@@ -7,7 +7,7 @@ type DB = InstanceType<typeof Database>;
 let db: DB;
 let dbPath: string;
 
-const LATEST_SCHEMA_VERSION = 4;
+const LATEST_SCHEMA_VERSION = 7;
 
 export async function initDatabase(customPath?: string): Promise<DB> {
   dbPath = path.resolve(customPath || process.env.DB_PATH || './data/app.db');
@@ -235,6 +235,37 @@ const migrations: Migration[] = [
       }
       if (!cols.includes('output_tokens')) {
         db.prepare('ALTER TABLE conversations ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0').run();
+      }
+    },
+  },
+  {
+    version: 5,
+    name: 'Add tools_hash to conversations',
+    run: () => {
+      const cols = getTableColumns('conversations');
+      if (!cols.includes('tools_hash')) {
+        db.prepare('ALTER TABLE conversations ADD COLUMN tools_hash TEXT DEFAULT \'\'').run();
+      }
+    },
+  },
+  {
+    version: 6,
+    name: 'Add last_used to conversations',
+    run: () => {
+      const cols = getTableColumns('conversations');
+      if (!cols.includes('last_used')) {
+        db.prepare('ALTER TABLE conversations ADD COLUMN last_used TEXT').run();
+        db.prepare("UPDATE conversations SET last_used = created_at WHERE last_used IS NULL").run();
+      }
+    },
+  },
+  {
+    version: 7,
+    name: 'Add last_message_id to conversations',
+    run: () => {
+      const cols = getTableColumns('conversations');
+      if (!cols.includes('last_message_id')) {
+        db.prepare('ALTER TABLE conversations ADD COLUMN last_message_id INTEGER').run();
       }
     },
   },

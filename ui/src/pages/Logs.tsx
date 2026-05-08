@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
-import { apiGet } from "../api/client";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { Button } from "../components/ui/button";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useEffect, useState } from 'react';
+import { apiGet } from '../api/client';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { Button } from '../components/ui/button';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface LogRecord {
   id: string;
@@ -74,18 +74,18 @@ export default function Logs() {
                   <TableCell>
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
-                        log.status < 400 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                        log.status < 400 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
                       }`}
                     >
                       {log.status}
                     </span>
                   </TableCell>
-                  <TableCell>{log.stream ? "Yes" : "No"}</TableCell>
+                  <TableCell>{log.stream ? 'Yes' : 'No'}</TableCell>
                   <TableCell>{log.input_tokens.toLocaleString()}</TableCell>
                   <TableCell>{log.output_tokens.toLocaleString()}</TableCell>
-                  <TableCell>{log.duration_ms ? `${log.duration_ms}ms` : "-"}</TableCell>
+                  <TableCell>{log.duration_ms ? `${log.duration_ms}ms` : '-'}</TableCell>
                   <TableCell className="font-mono text-xs">
-                    {log.api_key_id ? `${String(log.api_key_id).slice(0, 8)}...` : "-"}
+                    {log.api_key_id ? `${String(log.api_key_id).slice(0, 8)}...` : '-'}
                   </TableCell>
                 </TableRow>
               ))}

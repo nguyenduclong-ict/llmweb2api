@@ -75,6 +75,7 @@ export const anthropicAdapter: Adapter = {
       topP: body.top_p,
       stop: body.stop_sequences,
       reasoningEffort: resolved.thinking ? 'high' : undefined,
+      conversationId: body.conversation_id || undefined,
     };
   },
 
@@ -114,6 +115,7 @@ export const anthropicAdapter: Adapter = {
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
       },
+      ...(internal.conversationId ? { conversation_id: internal.conversationId } : {}),
     };
   },
 

@@ -1,7 +1,7 @@
 // Run: npx tsx tests/stream_reasoning.test.ts
 // Tests reasoningContent separation and ToolSieve streaming behavior.
 
-import { ToolSieve } from '../providers/deepseek/tool_sieve';
+import { ToolSieve } from '../providers/core/tool_sieve';
 
 // ── Replicate parseContent + helpers from index.ts for isolated testing ──
 

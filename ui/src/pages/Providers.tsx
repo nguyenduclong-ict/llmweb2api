@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
-import { apiGet, apiPost, apiPut, apiDelete } from "../api/client";
-import { Button } from "../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { AccountModal } from "../components/AccountModal";
-import { Plus, Pencil, Power, Trash2 } from "lucide-react";
+import { useEffect, useState } from 'react';
+import { apiGet, apiPost, apiPut, apiDelete } from '../api/client';
+import { Button } from '../components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { AccountModal } from '../components/AccountModal';
+import { Plus, Pencil, Power, Trash2 } from 'lucide-react';
 
 interface Account {
   id: number;
@@ -26,7 +26,7 @@ export default function Providers() {
   }, []);
 
   async function loadItems() {
-    const data = await apiGet<Account[]>("/api/accounts");
+    const data = await apiGet<Account[]>('/api/accounts');
     setItems(data);
   }
 
@@ -34,7 +34,7 @@ export default function Providers() {
     if (editingItem) {
       await apiPut(`/api/accounts/${editingItem.id}`, data);
     } else {
-      await apiPost("/api/accounts", data);
+      await apiPost('/api/accounts', data);
     }
     await loadItems();
   }
@@ -45,7 +45,7 @@ export default function Providers() {
   }
 
   async function handleDelete(id: number) {
-    if (confirm("Are you sure you want to delete this account?")) {
+    if (confirm('Are you sure you want to delete this account?')) {
       await apiDelete(`/api/accounts/${id}`);
       await loadItems();
     }
@@ -103,10 +103,10 @@ export default function Providers() {
                   <TableCell>
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
-                        item.enabled ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                        item.enabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
                       }`}
                     >
-                      {item.enabled ? "Active" : "Disabled"}
+                      {item.enabled ? 'Active' : 'Disabled'}
                     </span>
                   </TableCell>
                   <TableCell className="text-sm">{new Date(item.created_at).toLocaleDateString()}</TableCell>
@@ -135,12 +135,7 @@ export default function Providers() {
         </CardContent>
       </Card>
 
-      <AccountModal
-        open={modalOpen}
-        onOpenChange={setModalOpen}
-        editingAccount={editingItem}
-        onSave={handleSave}
-      />
+      <AccountModal open={modalOpen} onOpenChange={setModalOpen} editingAccount={editingItem} onSave={handleSave} />
     </div>
   );
 }

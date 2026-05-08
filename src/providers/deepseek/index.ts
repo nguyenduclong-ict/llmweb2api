@@ -5,10 +5,10 @@ import * as client from './client';
 import type { DeepSeekCompletionPayload } from './types';
 import { FILE_UPLOAD_THRESHOLD } from './types';
 import { getModelType } from './models';
-import { TOOL_SYSTEM_PROMPT, buildToolPrompt, block, BlockName } from './tool_prompt';
-import { ToolSieve } from './tool_sieve';
-import { parseToolCallXML } from './tool_parser';
-import type { ParsedToolCall } from './tool_parser';
+import { TOOL_SYSTEM_PROMPT, buildToolPrompt, block, BlockName } from '../core/tool_prompt';
+import { ToolSieve } from '../core/tool_sieve';
+import { parseToolCallXML } from '../core/tool_parser';
+import type { ParsedToolCall } from '../core/tool_parser';
 
 interface ImageRef {
   url: string;
@@ -26,6 +26,7 @@ class DeepSeekProvider implements Provider {
   private uploadedFileIds: string[] = [];
   private sentToolsHash = new Map<string, string>();
   private sentSystemPrompt = new Set<string>();
+  private sentConversationId = new Set<string>();
   private conversationTokens = new Map<string, { inputTokens: number; outputTokens: number }>();
 
   private accumulateTokens(sessionId: string, inputTokens: number, outputTokens: number): {
@@ -65,7 +66,9 @@ class DeepSeekProvider implements Provider {
   }
 
   async chat(ctx: SessionContext, request: InternalRequest): Promise<InternalResponse> {
-    const { prompt, refFileIds } = await this.buildPromptAndFiles(ctx.token, ctx.sessionId, request);
+    const forceTools = ctx.metadata.toolsChanged === true;
+    const isRestoredSession = ctx.metadata.isRestoredSession === true;
+    const { prompt, refFileIds } = await this.buildPromptAndFiles(ctx.token, ctx.sessionId, request, forceTools, isRestoredSession);
     const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/completion');
     const parentMessageId = ctx.metadata.parentMessageId ? Number(ctx.metadata.parentMessageId) : null;
     const payload: DeepSeekCompletionPayload = {
@@ -119,9 +122,10 @@ class DeepSeekProvider implements Provider {
       console.error('[DEEPSEEK] Full response text:', text);
     }
 
-    // Inject conversation_id as first reasoning line (same as streaming)
-    if (reasoning && ctx.metadata.conversationId) {
+    // Inject conversation_id as first reasoning line (only on first message)
+    if (reasoning && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
       reasoning = `#conversation_id:${ctx.metadata.conversationId}\n` + reasoning;
+      this.sentConversationId.add(ctx.sessionId);
     }
 
     const inputTokens = this.estimateTokens(prompt);
@@ -196,7 +200,7 @@ class DeepSeekProvider implements Provider {
               const content = result.content;
               let reasoning = result.reasoningContent;
 
-              if (firstChunk && ctx.metadata.conversationId) {
+              if (firstChunk && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
                 yield {
                   id: streamId,
                   model: request.model,
@@ -204,8 +208,9 @@ class DeepSeekProvider implements Provider {
                   reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
                   finishReason: null,
                 };
-                firstChunk = false;
+                this.sentConversationId.add(ctx.sessionId);
               }
+              firstChunk = false;
 
               if (content) {
                 const events = sieve.processChunk(content);
@@ -279,7 +284,9 @@ class DeepSeekProvider implements Provider {
     }
 
     // Normal completion flow
-    const { prompt, refFileIds } = await this.buildPromptAndFiles(ctx.token, ctx.sessionId, request);
+    const forceTools = ctx.metadata.toolsChanged === true;
+    const isRestoredSession = ctx.metadata.isRestoredSession === true;
+    const { prompt, refFileIds } = await this.buildPromptAndFiles(ctx.token, ctx.sessionId, request, forceTools, isRestoredSession);
     const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/completion');
     const parentMessageId = ctx.metadata.parentMessageId ? Number(ctx.metadata.parentMessageId) : null;
     const payload: DeepSeekCompletionPayload = {
@@ -323,7 +330,7 @@ class DeepSeekProvider implements Provider {
             const content = result.content;
             let reasoning = result.reasoningContent;
 
-            if (firstChunk && ctx.metadata.conversationId) {
+            if (firstChunk && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
               yield {
                 id: streamId,
                 model: request.model,
@@ -331,8 +338,9 @@ class DeepSeekProvider implements Provider {
                 reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
                 finishReason: null,
               };
-              firstChunk = false;
+              this.sentConversationId.add(ctx.sessionId);
             }
+            firstChunk = false;
 
             if (content) {
               const events = sieve.processChunk(content);
@@ -417,6 +425,7 @@ class DeepSeekProvider implements Provider {
   async dispose(ctx: SessionContext): Promise<void> {
     this.sentSystemPrompt.delete(ctx.sessionId);
     this.sentToolsHash.delete(ctx.sessionId);
+    this.sentConversationId.delete(ctx.sessionId);
     this.conversationTokens.delete(ctx.sessionId);
     try {
       await client.deleteSession(ctx.token, ctx.sessionId);
@@ -429,6 +438,8 @@ class DeepSeekProvider implements Provider {
     token: string,
     sessionId: string,
     request: InternalRequest,
+    forceTools = false,
+    isRestoredSession = false,
   ): Promise<{ prompt: string; refFileIds: string[] }> {
     const messages = request.messages;
     const tools = request.tools as ToolDef[] | undefined;
@@ -438,6 +449,14 @@ class DeepSeekProvider implements Provider {
     const imageRefs = extractImageRefs(messages as Array<{ role: string; content: unknown }>);
     const imageFileIds = imageRefs.length > 0 ? await uploadImageRefs(token, imageRefs) : [];
 
+    // Capture before sentSystemPrompt is mutated below
+    // isRestoredSession: DB restore sau restart — session đã có history, không phải conversation mới
+    const isNewConversation = !isRestoredSession && !this.sentSystemPrompt.has(sessionId);
+
+    if (isRestoredSession) {
+      this.sentSystemPrompt.add(sessionId);
+    }
+
     // Top section: TOOL_SYSTEM_PROMPT + (optional) tools block
     // Inject system prompt only on new conversation or when tools change
     const topParts: string[] = [];
@@ -446,13 +465,19 @@ class DeepSeekProvider implements Provider {
     if (hasTools) {
       const toolsHash = crypto.createHash('md5').update(JSON.stringify(tools)).digest('hex');
       const prevHash = this.sentToolsHash.get(sessionId);
-      toolsChanged = toolsHash !== prevHash;
-      if (toolsChanged) {
+      if (isRestoredSession && prevHash === undefined) {
+        // Sau restart, sentToolsHash bị mất. Seed lại từ request hiện tại
+        // mà không coi là toolsChanged — session đã có tools từ trước.
         this.sentToolsHash.set(sessionId, toolsHash);
+      } else {
+        toolsChanged = forceTools || toolsHash !== prevHash;
+        if (toolsChanged) {
+          this.sentToolsHash.set(sessionId, toolsHash);
+        }
       }
     }
 
-    if (!this.sentSystemPrompt.has(sessionId) || toolsChanged) {
+    if (isNewConversation || toolsChanged) {
       this.sentSystemPrompt.add(sessionId);
       topParts.push(TOOL_SYSTEM_PROMPT);
     }
@@ -461,11 +486,11 @@ class DeepSeekProvider implements Provider {
       topParts.push(buildToolPrompt(tools!));
     }
 
-    // Message section: only user + tool messages.
-    // Skip assistant — DeepSeek API is stateful (chat_session_id + parent_message_id),
-    // so the server already knows what the assistant said.
+    // Message section: on new conversation send all messages (assistant included).
+    // On subsequent requests, skip assistant — DeepSeek API is stateful
+    // (chat_session_id + parent_message_id), so the server already knows what the assistant said.
     const messageXml = messages
-      .filter((m) => m.role === 'user' || m.role === 'tool')
+      .filter((m) => isNewConversation || m.role !== 'assistant')
       .map((m) => {
         const text = messageContent(m as any);
         if (m.role === 'tool') {
@@ -486,21 +511,40 @@ class DeepSeekProvider implements Provider {
         `[DEEPSEEK] prompt size=${fullPrompt.length} >= threshold=${FILE_UPLOAD_THRESHOLD}, uploading message blocks as file`,
       );
       const filename = `${this.name}_${Date.now()}.txt`;
-      const uploadResult = await client.uploadFile(token, filename, messageXml);
+
+      let fileContent: string;
+      let inlineXml: string;
+
+      if (isNewConversation) {
+        // New conversation: API chưa có history. Đưa tất cả messages TRỪ message cuối vào file,
+        // message cuối cùng nằm trong prompt inline (tránh duplicate).
+        const lastMsg = messages[messages.length - 1];
+        const historyMsgs = messages.slice(0, -1);
+        fileContent = historyMsgs
+          .map((m) => {
+            const text = messageContent(m as any);
+            return m.role === 'tool' ? block('tool', text) : block('user', text);
+          })
+          .join('\n\n') || '(empty history)';
+        const lastText = messageContent(lastMsg as any);
+        inlineXml = block(lastMsg.role === 'tool' ? 'tool' : 'user', lastText);
+      } else {
+        // Có cache: API đã có history stateful. Không cần gửi lại context cũ.
+        // Tất cả message trong request đều là message mới → nằm trong prompt inline.
+        fileContent = '(Previous context is maintained by the chat session. See inline messages below for the current request.)';
+        inlineXml = messageXml;
+      }
+
+      const uploadResult = await client.uploadFile(token, filename, fileContent);
       this.uploadedFileIds.push(uploadResult.id);
       fileIds.push(uploadResult.id);
       await client.pollFileReady(token, uploadResult.id);
 
-      const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');
       const fileParts = [
         ...topParts,
         block('system', `Please read the attached file (${filename}) to understand the context.`),
+        inlineXml,
       ];
-      if (lastUserMsg) {
-        const userContent =
-          typeof lastUserMsg.content === 'string' ? lastUserMsg.content : messageContent(lastUserMsg as any);
-        fileParts.push(block('user', userContent));
-      }
       prompt = fileParts.join('\n\n');
     } else {
       console.log(`[DEEPSEEK] prompt size=${fullPrompt.length} < threshold=${FILE_UPLOAD_THRESHOLD}, inline`);

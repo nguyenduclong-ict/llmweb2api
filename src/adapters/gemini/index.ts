@@ -87,6 +87,7 @@ export const geminiAdapter: Adapter = {
       topP: genConfig.topP,
       stop: genConfig.stopSequences,
       reasoningEffort: resolved.thinking ? 'high' : undefined,
+      conversationId: body.conversation_id || undefined,
     };
   },
 
@@ -126,6 +127,7 @@ export const geminiAdapter: Adapter = {
         ...(internal.usage.reasoningTokens !== undefined ? { thoughtsTokenCount: internal.usage.reasoningTokens } : {}),
       },
       modelVersion: internal.model,
+      ...(internal.conversationId ? { conversation_id: internal.conversationId } : {}),
     };
   },
 
@@ -158,6 +160,10 @@ export const geminiAdapter: Adapter = {
         candidatesTokenCount: chunk.usage.outputTokens,
         totalTokenCount: chunk.usage.inputTokens + chunk.usage.outputTokens,
       };
+    }
+
+    if (chunk.conversationId) {
+      data.conversation_id = chunk.conversationId;
     }
 
     return JSON.stringify(data) + '\r\n';

@@ -3,6 +3,7 @@ import type { InternalRequest, InternalResponse, InternalStreamChunk, InternalMe
 import * as accountModel from '../../app/models/account';
 import * as conversationModel from '../../app/models/conversation';
 import { deleteSession as deleteDeepSeekSession } from '../deepseek/client';
+import { hashMessage, filterTrackedMessages, hashTools, updateHashCacheParentId, type HashCacheMap } from './hash';
 
 const providerRegistry = new Map<string, Provider>();
 
@@ -59,12 +60,15 @@ export async function processChat(
   request: InternalRequest,
   useCache?: boolean,
 ): Promise<{ response: InternalResponse; accountId: number; conversationId: string }> {
+  console.log(`[FLOW] processChat: useCache=${useCache} convId=${request.conversationId || '<none>'} model=${request.model}`);
+
   if (useCache) {
     return processChatWithCache(providerName, request, request.conversationId);
   }
 
   const provider = ensureProvider(providerName);
   const isNew = !request.conversationId;
+  console.log(`[FLOW] processChat non-cache: isNew=${isNew} convId=${request.conversationId || '<none>'}`);
   const ctx = isNew
     ? await createSession(provider, await selectAccount(providerName))
     : await reuseSession(providerName, request.conversationId!);
@@ -75,13 +79,13 @@ export async function processChat(
   }
 
   const response = await provider.chat(ctx, request);
-  response.conversationId = ctx.sessionId;
+  response.conversationId = request.conversationId || ctx.sessionId;
 
   if (ctx.metadata.lastResponseMessageId) {
     updateSessionParent(ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
   }
 
-  return { response, accountId: ctx.accountId, conversationId: ctx.sessionId };
+  return { response, accountId: ctx.accountId, conversationId: request.conversationId || ctx.sessionId };
 }
 
 export async function processChatStream(
@@ -89,12 +93,15 @@ export async function processChatStream(
   request: InternalRequest,
   useCache?: boolean,
 ): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
+  console.log(`[FLOW] processChatStream: useCache=${useCache} convId=${request.conversationId || '<none>'} model=${request.model}`);
+
   if (useCache) {
     return processChatStreamWithCache(providerName, request, request.conversationId);
   }
 
   const provider = ensureProvider(providerName);
   const isNew = !request.conversationId;
+  console.log(`[FLOW] processChatStream non-cache: isNew=${isNew} convId=${request.conversationId || '<none>'}`);
   const ctx = isNew
     ? await createSession(provider, await selectAccount(providerName))
     : await reuseSession(providerName, request.conversationId!);
@@ -121,7 +128,7 @@ export async function processChatStream(
     }
   }
 
-  return { stream: wrappedStream(), accountId: ctx.accountId, conversationId: ctx.sessionId };
+  return { stream: wrappedStream(), accountId: ctx.accountId, conversationId: request.conversationId || ctx.sessionId };
 }
 
 async function reuseSession(providerName: string, conversationId: string): Promise<SessionContext> {
@@ -131,13 +138,23 @@ async function reuseSession(providerName: string, conversationId: string): Promi
     return buildSessionContext(entry.accountId, entry.deepseekSessionId);
   }
 
-  // Session not in memory — start a brand new conversation
-  console.log(`[CONV] ${conversationId} not in sessionStore, starting new conversation`);
+  // Session not in memory — rebuild from DB or start fresh
+  console.log(`[CONV] ${conversationId} not in sessionStore, checking DB`);
+
+  const hashCache = conversationModel.loadHashCache(conversationId);
+  if (hashCache) {
+    // DB has hash cache — restore existing DeepSeek session (không tạo mới)
+    const { ctx } = await restoreSessionContext(providerName, conversationId);
+    return ctx;
+  }
+
+  // No DB entry — start fresh but preserve original conversationId as key
   const provider = ensureProvider(providerName);
   const account = await selectAccount(providerName);
+  console.log(`[CONV] ${conversationId} not in DB, creating new DeepSeek session`);
   const ctx = await createSession(provider, account);
-  ctx.metadata.conversationId = ctx.sessionId;
-  saveSession(ctx.sessionId, ctx.sessionId, ctx.accountId);
+  ctx.metadata.conversationId = conversationId;
+  saveSession(conversationId, ctx.sessionId, account.itemId);
   return ctx;
 }
 
@@ -146,7 +163,9 @@ async function reuseSession(providerName: string, conversationId: string): Promi
 interface CachedConversation {
   conversationId: string;
   accountId: number;
-  previousMessages: InternalMessage[];
+  hashCache: HashCacheMap;
+  toolsHash: string | null;
+  lastMessageId: number | null;
 }
 
 const conversationCache = new Map<string, CachedConversation>();
@@ -292,33 +311,6 @@ async function createSession(provider: Provider, account: AccountSelection): Pro
   return ctx;
 }
 
-async function createFreshSession(accountId: number, conversationId: string): Promise<SessionContext> {
-  const items = accountModel.getByProvider('deepseek');
-  const item = items.find((i) => i.id === accountId);
-  if (!item) throw new Error(`Account ${accountId} not found`);
-
-  let settings: Record<string, unknown>;
-  try {
-    settings = JSON.parse(item.settings);
-  } catch {
-    settings = {};
-  }
-  let session: Record<string, unknown>;
-  try {
-    session = JSON.parse(item.session || '{}');
-  } catch {
-    session = {};
-  }
-
-  const token = await ensureToken({ itemId: item.id, settings, session });
-  const provider = ensureProvider('deepseek');
-  const ctx = await provider.createSession({ accountId: item.id, token, sessionId: '', metadata: {} });
-  ctx.metadata.conversationId = conversationId;
-  saveSession(conversationId, ctx.sessionId, accountId);
-  console.log(`[CONV] Fresh session created: ${ctx.sessionId} for conversation ${conversationId}`);
-  return ctx;
-}
-
 async function buildSessionContext(accountId: number, conversationId: string): Promise<SessionContext> {
   const items = accountModel.getByProvider('deepseek');
   const item = items.find((i) => i.id === accountId);
@@ -342,7 +334,7 @@ async function buildSessionContext(accountId: number, conversationId: string): P
   return {
     accountId,
     token,
-    sessionId: conversationId,
+    sessionId: entry?.deepseekSessionId || conversationId,
     metadata: { parentMessageId: entry?.parentMessageId },
   };
 }
@@ -364,15 +356,23 @@ async function processFirstCachedChat(
   if (ctx.metadata.lastResponseMessageId) {
     updateSessionParent(ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
   }
+  if (ctx.metadata.lastRequestMessageId) {
+    updateSessionLastRequestId(ctx.sessionId, ctx.metadata.lastRequestMessageId as string);
+  }
 
-  const messages = [...request.messages];
+  const lastMessageId = ctx.metadata.lastResponseMessageId ? Number(ctx.metadata.lastResponseMessageId) : null;
+  const hashCache = buildHashCacheFromRequest(request, ctx.metadata);
+  const toolsHash = hashTools(request.tools as unknown[] | undefined);
+
   conversationCache.set(ctx.sessionId, {
     conversationId: ctx.sessionId,
     accountId: account.itemId,
-    previousMessages: messages,
+    hashCache,
+    toolsHash,
+    lastMessageId,
   });
-  conversationModel.saveConversation(
-    ctx.sessionId, account.itemId, providerName, messages,
+  conversationModel.saveHashCache(
+    ctx.sessionId, account.itemId, providerName, hashCache, toolsHash, lastMessageId,
     response.usage.cumulativeInputTokens,
     response.usage.cumulativeOutputTokens,
   );
@@ -395,33 +395,59 @@ async function processFirstCachedChatStream(
   saveSession(ctx.sessionId, ctx.sessionId, account.itemId);
 
   const innerStream = provider.chatStream(ctx, request);
-
-  const messages = [...request.messages];
+  const toolsHash = hashTools(request.tools as unknown[] | undefined);
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
-    let cumInput: number | undefined;
-    let cumOutput: number | undefined;
+    let saved = false;
+    let lastMsgSaved = false;
     try {
       for await (const chunk of innerStream) {
-        if (chunk.usage?.cumulativeInputTokens != null) {
-          cumInput = chunk.usage.cumulativeInputTokens;
-          cumOutput = chunk.usage.cumulativeOutputTokens;
+        if (!saved) {
+          saved = true;
+          const lastMessageId = ctx.metadata.lastResponseMessageId ? Number(ctx.metadata.lastResponseMessageId) : null;
+          const hashCache = buildHashCacheFromRequest(request, ctx.metadata);
+          conversationCache.set(ctx.sessionId, {
+            conversationId: ctx.sessionId,
+            accountId: account.itemId,
+            hashCache,
+            toolsHash,
+            lastMessageId,
+          });
+          conversationModel.saveHashCache(
+            ctx.sessionId, account.itemId, providerName, hashCache, toolsHash, lastMessageId,
+          );
+          if (lastMessageId !== null) {
+            lastMsgSaved = true;
+            updateSessionParent(ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
+          }
+        }
+        // Cập nhật lastMessageId ngay khi có, không đợi finally
+        if (!lastMsgSaved && ctx.metadata.lastResponseMessageId) {
+          lastMsgSaved = true;
+          updateSessionParent(ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
+          const conv = conversationCache.get(ctx.sessionId);
+          if (conv) {
+            conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
+            conversationModel.saveHashCache(
+              ctx.sessionId, account.itemId, providerName, conv.hashCache, toolsHash, conv.lastMessageId,
+            );
+          }
         }
         yield chunk;
       }
     } finally {
-      if (ctx.metadata.lastResponseMessageId) {
+      if (ctx.metadata.lastResponseMessageId && !lastMsgSaved) {
         updateSessionParent(ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
+        const conv = conversationCache.get(ctx.sessionId);
+        if (conv) {
+          conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
+        }
       }
       if (ctx.metadata.lastRequestMessageId) {
         updateSessionLastRequestId(ctx.sessionId, ctx.metadata.lastRequestMessageId as string);
       }
-      conversationCache.set(ctx.sessionId, {
-        conversationId: ctx.sessionId,
-        accountId: account.itemId,
-        previousMessages: messages,
-      });
-      conversationModel.saveConversation(ctx.sessionId, account.itemId, providerName, messages, cumInput, cumOutput);
     }
   }
 
@@ -438,20 +464,31 @@ async function processCachedChat(
   const cached = conversationCache.get(conversationId);
 
   if (!cached) {
-    const dbMessages = conversationModel.loadMessages(conversationId);
-    if (!dbMessages || dbMessages.length === 0) {
-      console.log(`[CONV] ${conversationId} not found in cache or DB, starting new cached conversation`);
-      return processFirstCachedChat(providerName, request);
+    console.log(`[FLOW] processCachedChat: ${conversationId} not in memory, checking DB`);
+    const hashCache = conversationModel.loadHashCache(conversationId);
+    if (!hashCache) {
+      const dbMessages = conversationModel.loadMessages(conversationId);
+      if (!dbMessages || dbMessages.length === 0) {
+        console.log(`[FLOW] processCachedChat: ${conversationId} NOT in DB either → NEW conversation`);
+        return processFirstCachedChat(providerName, request);
+      }
+      console.log(`[FLOW] processCachedChat: ${conversationId} found legacy messages in DB → restore legacy`);
+      return handleDbRestoreChat(providerName, request, conversationId, dbMessages);
     }
-    return handleDbRestoreChat(providerName, request, conversationId, dbMessages);
+    console.log(`[FLOW] processCachedChat: ${conversationId} found hashCache in DB → restore with hash`);
+    return handleDbRestoreWithHash(providerName, request, conversationId, hashCache);
   }
 
-  const { diffMessages, divergedAt } = computeDiff(cached.previousMessages, request.messages);
+  const cachedCount = Object.keys(cached.hashCache).length;
+  const diff = computeHashDiff(cached.hashCache, request.messages, cachedCount, cached.lastMessageId);
+  const provider = ensureProvider(providerName);
 
-  // Same messages → regenerate
-  if (diffMessages.length === 0) {
-    console.log(`[CONV] No new messages for ${conversationId}, regenerating...`);
-    const provider = ensureProvider(providerName);
+  const newToolsHash = hashTools(request.tools as unknown[] | undefined);
+  const toolsChanged = newToolsHash !== null && newToolsHash !== cached.toolsHash;
+
+  // All messages match → regenerate
+  if (diff.isFullMatch) {
+    console.log(`[CONV] Full hash match for ${conversationId}, regenerating`);
     const ctx = await buildSessionContext(cached.accountId, conversationId);
     ctx.metadata.parentMessageId = undefined;
     ctx.metadata.conversationId = conversationId;
@@ -460,53 +497,68 @@ async function processCachedChat(
 
     if (ctx.metadata.lastResponseMessageId) {
       updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-    }
-
-    return { response: { ...response, conversationId }, accountId: cached.accountId, conversationId };
-  }
-
-  const provider = ensureProvider(providerName);
-
-  // Branch detected: client removed cached messages, create new session
-  if (divergedAt < cached.previousMessages.length) {
-    console.log(`[CONV] Branch at index ${divergedAt}, creating new session for ${conversationId}`);
-    const ctx = await createFreshSession(cached.accountId, conversationId);
-
-    const response = await provider.chat(ctx, request);
-
-    if (ctx.metadata.lastResponseMessageId) {
-      updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+      cached.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+      updateHashCacheParentId(cached.hashCache, request.messages, cached.lastMessageId);
     }
     if (ctx.metadata.lastRequestMessageId) {
       updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
     }
 
-    const messages = [...request.messages];
-    conversationCache.set(conversationId, { conversationId, accountId: cached.accountId, previousMessages: messages });
-    conversationModel.saveConversation(
-      conversationId, cached.accountId, providerName, messages,
-      response.usage.cumulativeInputTokens,
-      response.usage.cumulativeOutputTokens,
-    );
+    return { response: { ...response, conversationId }, accountId: cached.accountId, conversationId };
+  }
+
+  const isRevert = diff.matchedCount < cachedCount;
+  console.log(
+    `[DIFF] hash matched=${diff.matchedCount} cached=${cachedCount} ` +
+      `new=${diff.messagesToSend.length} revert=${isRevert}`,
+  );
+
+  // Revert: prune hash entries after divergence, use edit flow
+  if (isRevert) {
+    pruneHashCache(cached.hashCache, diff.lastMatchedHash);
+
+    const ctx = await buildSessionContext(cached.accountId, conversationId);
+    ctx.metadata.parentMessageId = diff.parentMessageId;
+    ctx.metadata.conversationId = conversationId;
+
+    const response = await provider.chat(ctx, request);
+
+    if (ctx.metadata.lastResponseMessageId) {
+      updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+      cached.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+      updateHashCacheParentId(cached.hashCache, request.messages, cached.lastMessageId);
+    }
+    if (ctx.metadata.lastRequestMessageId) {
+      updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
+    }
+
+    addRequestToHashCache(cached.hashCache, request.messages, ctx.metadata);
+    if (toolsChanged) cached.toolsHash = newToolsHash;
+    conversationModel.saveHashCache(conversationId, cached.accountId, providerName, cached.hashCache, cached.toolsHash, cached.lastMessageId);
 
     return { response: { ...response, conversationId }, accountId: cached.accountId, conversationId };
   }
 
-  // Normal append
+  // Normal append: send only new messages
   const ctx = await buildSessionContext(cached.accountId, conversationId);
-  const diffRequest: InternalRequest = { ...request, messages: diffMessages };
+  ctx.metadata.parentMessageId = diff.parentMessageId;
+  ctx.metadata.conversationId = conversationId;
+
+  const diffRequest: InternalRequest = { ...request, messages: diff.messagesToSend };
   const response = await provider.chat(ctx, diffRequest);
 
   if (ctx.metadata.lastResponseMessageId) {
     updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+    cached.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+    updateHashCacheParentId(cached.hashCache, request.messages, cached.lastMessageId);
+  }
+  if (ctx.metadata.lastRequestMessageId) {
+    updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
   }
 
-  cached.previousMessages = [...request.messages];
-  conversationModel.saveConversation(
-    conversationId, cached.accountId, providerName, cached.previousMessages,
-    response.usage.cumulativeInputTokens,
-    response.usage.cumulativeOutputTokens,
-  );
+  addRequestToHashCache(cached.hashCache, request.messages, ctx.metadata);
+  if (toolsChanged) cached.toolsHash = newToolsHash;
+  conversationModel.saveHashCache(conversationId, cached.accountId, providerName, cached.hashCache, cached.toolsHash, cached.lastMessageId);
 
   return { response: { ...response, conversationId }, accountId: cached.accountId, conversationId };
 }
@@ -519,232 +571,586 @@ async function processCachedChatStream(
   const cached = conversationCache.get(conversationId);
 
   if (!cached) {
-    const dbMessages = conversationModel.loadMessages(conversationId);
-    if (!dbMessages || dbMessages.length === 0) {
-      console.log(`[CONV] ${conversationId} not found in cache or DB, starting new cached stream`);
-      return processFirstCachedChatStream(providerName, request);
+    console.log(`[FLOW] processCachedChatStream: ${conversationId} not in memory, checking DB`);
+    const hashCache = conversationModel.loadHashCache(conversationId);
+    if (!hashCache) {
+      const dbMessages = conversationModel.loadMessages(conversationId);
+      if (!dbMessages || dbMessages.length === 0) {
+        console.log(`[FLOW] processCachedChatStream: ${conversationId} NOT in DB either → NEW conversation`);
+        return processFirstCachedChatStream(providerName, request);
+      }
+      console.log(`[FLOW] processCachedChatStream: ${conversationId} found legacy messages in DB → restore legacy`);
+      return handleDbRestoreChatStream(providerName, request, conversationId, dbMessages);
     }
-    return handleDbRestoreChatStream(providerName, request, conversationId, dbMessages);
+    console.log(`[FLOW] processCachedChatStream: ${conversationId} found hashCache in DB → restore with hash`);
+    return handleDbRestoreStreamWithHash(providerName, request, conversationId, hashCache);
   }
 
-  const { diffMessages, divergedAt } = computeDiff(cached.previousMessages, request.messages);
+  // Capture reference for closures
+  const conv = cached;
 
-  // Same messages → regenerate via edit_message
-  if (diffMessages.length === 0) {
+  const cachedCount = Object.keys(conv.hashCache).length;
+  const diff = computeHashDiff(conv.hashCache, request.messages, cachedCount, conv.lastMessageId);
+  const provider = ensureProvider(providerName);
+
+  const newToolsHash = hashTools(request.tools as unknown[] | undefined);
+  const toolsChanged = newToolsHash !== null && newToolsHash !== conv.toolsHash;
+
+  // All messages match → regenerate via edit_message
+  if (diff.isFullMatch) {
     const entry = getSession(conversationId);
     const lastReqId = entry?.lastRequestMessageId;
     if (lastReqId) {
-      console.log(`[CONV] No new messages for ${conversationId}, regenerating via edit_message id=${lastReqId}`);
+      console.log(`[CONV] Full hash match for ${conversationId}, regenerating via edit_message id=${lastReqId}`);
     } else {
-      console.log(`[CONV] No new messages for ${conversationId}, regenerating (no edit id, full regenerate)`);
+      console.log(`[CONV] Full hash match for ${conversationId}, regenerating (no edit id, full regenerate)`);
     }
-    const provider = ensureProvider(providerName);
-    const ctx = await buildSessionContext(cached.accountId, conversationId);
+    const ctx = await buildSessionContext(conv.accountId, conversationId);
     ctx.metadata.editMessageId = lastReqId ? Number(lastReqId) : undefined;
     ctx.metadata.conversationId = conversationId;
 
     const innerStream = provider.chatStream(ctx, request);
-    const messages = [...request.messages];
-    const accountId = cached.accountId;
+    const accountId = conv.accountId;
 
     async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
-      let cumInput: number | undefined;
-      let cumOutput: number | undefined;
+      let saved = false;
+      let lastMsgSaved = false;
       try {
         for await (const chunk of innerStream) {
-          if (chunk.usage?.cumulativeInputTokens != null) {
-            cumInput = chunk.usage.cumulativeInputTokens;
-            cumOutput = chunk.usage.cumulativeOutputTokens;
+          if (!saved) {
+            saved = true;
+            if (toolsChanged) conv.toolsHash = newToolsHash;
+            conversationModel.saveHashCache(conversationId, accountId, providerName, conv.hashCache, conv.toolsHash, conv.lastMessageId);
+            if (ctx.metadata.lastResponseMessageId) {
+              lastMsgSaved = true;
+              updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+              conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+              updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
+            }
+          }
+          if (!lastMsgSaved && ctx.metadata.lastResponseMessageId) {
+            lastMsgSaved = true;
+            updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+            conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
+            conversationModel.saveHashCache(conversationId, accountId, providerName, conv.hashCache, conv.toolsHash, conv.lastMessageId);
           }
           yield chunk;
         }
       } finally {
-        if (ctx.metadata.lastResponseMessageId) {
+        if (ctx.metadata.lastResponseMessageId && !lastMsgSaved) {
           updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+          conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
         }
-        conversationModel.saveConversation(conversationId, accountId, providerName, messages, cumInput, cumOutput);
+        if (ctx.metadata.lastRequestMessageId) {
+          updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
+        }
       }
     }
 
     return { stream: wrappedStream(), accountId, conversationId };
   }
 
-  const provider = ensureProvider(providerName);
+  const isRevert = diff.matchedCount < cachedCount;
+  console.log(
+    `[DIFF] hash matched=${diff.matchedCount} cached=${cachedCount} ` +
+      `new=${diff.messagesToSend.length} revert=${isRevert}`,
+  );
 
-  // Branch detected: client removed some cached messages, need new session
-  if (divergedAt < cached.previousMessages.length) {
-    console.log(`[CONV] Branch at index ${divergedAt}, creating new session for ${conversationId}`);
-    const conv2 = cached;
-    const ctx = await createFreshSession(conv2.accountId, conversationId);
+  // Revert: prune hash entries after divergence, use edit_message
+  if (isRevert) {
+    pruneHashCache(conv.hashCache, diff.lastMatchedHash);
+
+    const entry = getSession(conversationId);
+    const lastReqId = entry?.lastRequestMessageId;
+    const editMsgId = diff.matchedCount > 0 ? diff.parentMessageId : undefined;
+    const useEditId = lastReqId ? Number(lastReqId) : (editMsgId ?? undefined);
+
+    const ctx = await buildSessionContext(conv.accountId, conversationId);
+    ctx.metadata.editMessageId = useEditId;
+    ctx.metadata.parentMessageId = diff.parentMessageId;
+    ctx.metadata.conversationId = conversationId;
 
     const innerStream = provider.chatStream(ctx, request);
-    const messages = [...request.messages];
+    const accountId = conv.accountId;
 
     async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
-      let cumInput: number | undefined;
-      let cumOutput: number | undefined;
+      let saved = false;
+      let lastMsgSaved = false;
       try {
         for await (const chunk of innerStream) {
-          if (chunk.usage?.cumulativeInputTokens != null) {
-            cumInput = chunk.usage.cumulativeInputTokens;
-            cumOutput = chunk.usage.cumulativeOutputTokens;
+          if (!saved) {
+            saved = true;
+            addRequestToHashCache(conv.hashCache, request.messages, ctx.metadata);
+            if (toolsChanged) conv.toolsHash = newToolsHash;
+            conversationModel.saveHashCache(conversationId, accountId, providerName, conv.hashCache, conv.toolsHash, conv.lastMessageId);
+            if (ctx.metadata.lastResponseMessageId) {
+              lastMsgSaved = true;
+              updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+              conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+              updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
+            }
+          }
+          if (!lastMsgSaved && ctx.metadata.lastResponseMessageId) {
+            lastMsgSaved = true;
+            updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+            conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
+            conversationModel.saveHashCache(conversationId, accountId, providerName, conv.hashCache, conv.toolsHash, conv.lastMessageId);
           }
           yield chunk;
         }
       } finally {
-        if (ctx.metadata.lastResponseMessageId) {
+        if (ctx.metadata.lastResponseMessageId && !lastMsgSaved) {
           updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+          conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
         }
         if (ctx.metadata.lastRequestMessageId) {
           updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
         }
-        conversationCache.set(conversationId, {
-          conversationId,
-          accountId: conv2.accountId,
-          previousMessages: messages,
-        });
-        conversationModel.saveConversation(conversationId, conv2.accountId, providerName, messages, cumInput, cumOutput);
+        if (!saved) {
+          conversationModel.saveHashCache(conversationId, accountId, providerName, conv.hashCache, conv.toolsHash, conv.lastMessageId);
+        }
       }
     }
 
-    return { stream: wrappedStream(), accountId: conv2.accountId, conversationId };
+    return { stream: wrappedStream(), accountId, conversationId };
   }
 
-  // Normal append
-  const conv = cached;
+  // Normal append: send only new messages
   const ctx = await buildSessionContext(conv.accountId, conversationId);
-  const diffRequest: InternalRequest = { ...request, messages: diffMessages };
-  const innerStream = provider.chatStream(ctx, diffRequest);
+  ctx.metadata.parentMessageId = diff.parentMessageId;
+  ctx.metadata.conversationId = conversationId;
 
-  const messages = [...request.messages];
+  const diffRequest: InternalRequest = { ...request, messages: diff.messagesToSend };
+  const innerStream = provider.chatStream(ctx, diffRequest);
+  const accountId = conv.accountId;
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
-    let cumInput: number | undefined;
-    let cumOutput: number | undefined;
+    let saved = false;
+    let lastMsgSaved = false;
     try {
       for await (const chunk of innerStream) {
-        if (chunk.usage?.cumulativeInputTokens != null) {
-          cumInput = chunk.usage.cumulativeInputTokens;
-          cumOutput = chunk.usage.cumulativeOutputTokens;
+        if (!saved) {
+          saved = true;
+          addRequestToHashCache(conv.hashCache, request.messages, ctx.metadata);
+          if (toolsChanged) conv.toolsHash = newToolsHash;
+          conversationModel.saveHashCache(conversationId, accountId, providerName, conv.hashCache, conv.toolsHash, conv.lastMessageId);
+          if (ctx.metadata.lastResponseMessageId) {
+            lastMsgSaved = true;
+            updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+            conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
+          }
+        }
+        if (!lastMsgSaved && ctx.metadata.lastResponseMessageId) {
+          lastMsgSaved = true;
+          updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+          conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
+          conversationModel.saveHashCache(conversationId, accountId, providerName, conv.hashCache, conv.toolsHash, conv.lastMessageId);
         }
         yield chunk;
       }
     } finally {
-      if (ctx.metadata.lastResponseMessageId) {
+      if (ctx.metadata.lastResponseMessageId && !lastMsgSaved) {
         updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+        conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+        updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
       }
       if (ctx.metadata.lastRequestMessageId) {
         updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
       }
-      conversationCache.set(conversationId, {
-        conversationId,
-        accountId: conv.accountId,
-        previousMessages: messages,
-      });
-      conversationModel.saveConversation(conversationId, conv.accountId, providerName, messages, cumInput, cumOutput);
+      if (!saved) {
+        conversationModel.saveHashCache(conversationId, accountId, providerName, conv.hashCache, conv.toolsHash, conv.lastMessageId);
+      }
     }
   }
 
-  return { stream: wrappedStream(), accountId: conv.accountId, conversationId };
+  return { stream: wrappedStream(), accountId, conversationId };
 }
 
 // --- DB Restore (after server restart) ---
+
+async function restoreSessionContext(
+  providerName: string,
+  conversationId: string,
+): Promise<{ ctx: SessionContext; account: AccountSelection }> {
+  ensureProvider(providerName);
+  const account = await selectAccount(providerName);
+  const token = await ensureToken(account);
+  const lastMessageId = conversationModel.loadLastMessageId(conversationId);
+  const ctx: SessionContext = {
+    accountId: account.itemId,
+    token,
+    sessionId: conversationId,
+    metadata: {
+      parentMessageId: lastMessageId ?? undefined,
+      conversationId,
+      isRestoredSession: true,
+    },
+  };
+  saveSession(conversationId, conversationId, account.itemId, String(lastMessageId || ''));
+  console.log(`[CONV] Restored existing session: ${conversationId} parentMsgId=${lastMessageId || '<none>'}`);
+  return { ctx, account };
+}
 
 async function handleDbRestoreChat(
   providerName: string,
   request: InternalRequest,
   conversationId: string,
-  _dbMessages: InternalMessage[],
+  dbMessages: InternalMessage[],
 ): Promise<{ response: InternalResponse; accountId: number; conversationId: string }> {
-  const provider = ensureProvider(providerName);
-  const account = await selectAccount(providerName);
-  const ctx = await createSession(provider, account);
-  ctx.metadata.conversationId = conversationId;
-  saveSession(conversationId, ctx.sessionId, account.itemId);
-
-  const response = await provider.chat(ctx, request);
-
-  if (ctx.metadata.lastResponseMessageId) {
-    updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-  }
-
-  const messages = [...request.messages];
-  conversationCache.set(conversationId, { conversationId, accountId: account.itemId, previousMessages: messages });
-  conversationModel.saveConversation(
-    conversationId, account.itemId, providerName, messages,
-    response.usage.cumulativeInputTokens,
-    response.usage.cumulativeOutputTokens,
-  );
-
-  return { response: { ...response, conversationId }, accountId: account.itemId, conversationId };
+  // Migrate legacy messages → hash cache, then delegate to hash handler
+  const hashCache = buildHashCacheFromMessages(dbMessages);
+  return handleDbRestoreWithHash(providerName, request, conversationId, hashCache);
 }
 
 async function handleDbRestoreChatStream(
   providerName: string,
   request: InternalRequest,
   conversationId: string,
-  _dbMessages: InternalMessage[],
+  dbMessages: InternalMessage[],
+): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
+  // Migrate legacy messages → hash cache, then delegate to hash handler
+  const hashCache = buildHashCacheFromMessages(dbMessages);
+  return handleDbRestoreStreamWithHash(providerName, request, conversationId, hashCache);
+}
+
+async function handleDbRestoreWithHash(
+  providerName: string,
+  request: InternalRequest,
+  conversationId: string,
+  hashCache: HashCacheMap,
+): Promise<{ response: InternalResponse; accountId: number; conversationId: string }> {
+  const provider = ensureProvider(providerName);
+  const cachedCount = Object.keys(hashCache).length;
+  const lastMessageId = conversationModel.loadLastMessageId(conversationId);
+  const diff = computeHashDiff(hashCache, request.messages, cachedCount, lastMessageId);
+
+  const newToolsHash = hashTools(request.tools as unknown[] | undefined);
+  const toolsChanged = newToolsHash !== null && newToolsHash !== conversationModel.loadToolsHash(conversationId);
+
+  // Full match: regenerate toàn bộ
+  if (diff.isFullMatch) {
+    console.log(`[CONV] DB full hash match for ${conversationId}, regenerating`);
+    const { ctx, account } = await restoreSessionContext(providerName, conversationId);
+    ctx.metadata.parentMessageId = undefined;
+    ctx.metadata.toolsChanged = toolsChanged;
+
+    const response = await provider.chat(ctx, request);
+
+    if (ctx.metadata.lastResponseMessageId) {
+      updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+    }
+    if (ctx.metadata.lastRequestMessageId) {
+      updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
+    }
+
+    return { response: { ...response, conversationId }, accountId: account.itemId, conversationId };
+  }
+
+  const isRevert = diff.matchedCount < cachedCount;
+  console.log(
+    `[DIFF] DB hash matched=${diff.matchedCount} cached=${cachedCount} ` +
+      `new=${diff.messagesToSend.length} revert=${isRevert}`,
+  );
+
+  if (isRevert) {
+    pruneHashCache(hashCache, diff.lastMatchedHash);
+  }
+
+  // Normal append or revert: restore session, send messagesToSend
+  const { ctx, account } = await restoreSessionContext(providerName, conversationId);
+  ctx.metadata.parentMessageId = diff.parentMessageId;
+  ctx.metadata.toolsChanged = toolsChanged || isRevert;
+
+  const diffRequest: InternalRequest = { ...request, messages: diff.messagesToSend };
+  const response = await provider.chat(ctx, diffRequest);
+
+  if (ctx.metadata.lastResponseMessageId) {
+    updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+    const newLastId = Number(ctx.metadata.lastResponseMessageId);
+    addRequestToHashCache(hashCache, request.messages, ctx.metadata);
+    updateHashCacheParentId(hashCache, request.messages, newLastId);
+    conversationCache.set(conversationId, { conversationId, accountId: account.itemId, hashCache, toolsHash: newToolsHash, lastMessageId: newLastId });
+    conversationModel.saveHashCache(
+      conversationId, account.itemId, providerName, hashCache, newToolsHash, newLastId,
+      response.usage.cumulativeInputTokens,
+      response.usage.cumulativeOutputTokens,
+    );
+  }
+  if (ctx.metadata.lastRequestMessageId) {
+    updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
+  }
+
+  return { response: { ...response, conversationId }, accountId: account.itemId, conversationId };
+}
+
+async function handleDbRestoreStreamWithHash(
+  providerName: string,
+  request: InternalRequest,
+  conversationId: string,
+  hashCache: HashCacheMap,
 ): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
   const provider = ensureProvider(providerName);
-  const account = await selectAccount(providerName);
-  const ctx = await createSession(provider, account);
-  ctx.metadata.conversationId = conversationId;
-  saveSession(conversationId, ctx.sessionId, account.itemId);
+  const cachedCount = Object.keys(hashCache).length;
+  const lastMessageId = conversationModel.loadLastMessageId(conversationId);
+  const diff = computeHashDiff(hashCache, request.messages, cachedCount, lastMessageId);
 
-  const innerStream = provider.chatStream(ctx, request);
-  const messages = [...request.messages];
+  const newToolsHash = hashTools(request.tools as unknown[] | undefined);
+  const toolsChanged = newToolsHash !== null && newToolsHash !== conversationModel.loadToolsHash(conversationId);
+
+  // Full match: regenerate
+  if (diff.isFullMatch) {
+    const entry = getSession(conversationId);
+    const lastReqId = entry?.lastRequestMessageId;
+    if (lastReqId) {
+      console.log(`[CONV] DB full hash match for ${conversationId}, regenerating via edit_message id=${lastReqId}`);
+    } else {
+      console.log(`[CONV] DB full hash match for ${conversationId}, regenerating (no edit id, full regenerate)`);
+    }
+    const { ctx, account } = await restoreSessionContext(providerName, conversationId);
+    ctx.metadata.parentMessageId = undefined;
+    ctx.metadata.editMessageId = lastReqId ? Number(lastReqId) : undefined;
+    ctx.metadata.toolsChanged = toolsChanged;
+
+    const innerStream = provider.chatStream(ctx, request);
+
+    async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
+      let saved = false;
+      let lastMsgSaved = false;
+      try {
+        for await (const chunk of innerStream) {
+          if (!saved) {
+            saved = true;
+            if (toolsChanged) {
+              conversationModel.saveHashCache(conversationId, account.itemId, providerName, hashCache, newToolsHash, lastMessageId);
+            }
+            if (ctx.metadata.lastResponseMessageId) {
+              lastMsgSaved = true;
+              updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+            }
+          }
+          if (!lastMsgSaved && ctx.metadata.lastResponseMessageId) {
+            lastMsgSaved = true;
+            updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+          }
+          yield chunk;
+        }
+      } finally {
+        if (ctx.metadata.lastResponseMessageId && !lastMsgSaved) {
+          updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+        }
+        if (ctx.metadata.lastRequestMessageId) {
+          updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
+        }
+      }
+    }
+
+    return { stream: wrappedStream(), accountId: account.itemId, conversationId };
+  }
+
+  const isRevert = diff.matchedCount < cachedCount;
+  console.log(
+    `[DIFF] DB hash matched=${diff.matchedCount} cached=${cachedCount} ` +
+      `new=${diff.messagesToSend.length} revert=${isRevert}`,
+  );
+
+  if (isRevert) {
+    pruneHashCache(hashCache, diff.lastMatchedHash);
+  }
+
+  // Normal append or revert: restore session, send messagesToSend
+  const { ctx, account } = await restoreSessionContext(providerName, conversationId);
+  ctx.metadata.parentMessageId = diff.parentMessageId;
+  ctx.metadata.toolsChanged = toolsChanged || isRevert;
+
+  if (isRevert) {
+    const entry = getSession(conversationId);
+    const lastReqId = entry?.lastRequestMessageId;
+    const editMsgId = diff.matchedCount > 0 ? diff.parentMessageId : undefined;
+    ctx.metadata.editMessageId = lastReqId ? Number(lastReqId) : (editMsgId ?? undefined);
+  }
+
+  const diffRequest: InternalRequest = { ...request, messages: diff.messagesToSend };
+  const innerStream = provider.chatStream(ctx, diffRequest);
+  const finalToolsHash = newToolsHash;
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
-    let cumInput: number | undefined;
-    let cumOutput: number | undefined;
+    let saved = false;
+    let lastMsgSaved = false;
     try {
       for await (const chunk of innerStream) {
-        if (chunk.usage?.cumulativeInputTokens != null) {
-          cumInput = chunk.usage.cumulativeInputTokens;
-          cumOutput = chunk.usage.cumulativeOutputTokens;
+        if (!saved) {
+          saved = true;
+          addRequestToHashCache(hashCache, request.messages, ctx.metadata);
+          if (toolsChanged || isRevert) {
+            conversationModel.saveHashCache(conversationId, account.itemId, providerName, hashCache, finalToolsHash, lastMessageId);
+          }
+          conversationCache.set(conversationId, {
+            conversationId, accountId: account.itemId, hashCache, toolsHash: finalToolsHash, lastMessageId,
+          });
+          conversationModel.saveHashCache(conversationId, account.itemId, providerName, hashCache, finalToolsHash, lastMessageId);
+          if (ctx.metadata.lastResponseMessageId) {
+            lastMsgSaved = true;
+            updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+          }
+        }
+        if (!lastMsgSaved && ctx.metadata.lastResponseMessageId) {
+          lastMsgSaved = true;
+          updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+          const conv = conversationCache.get(conversationId);
+          if (conv) {
+            conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
+            conversationModel.saveHashCache(conversationId, account.itemId, providerName, conv.hashCache, finalToolsHash, conv.lastMessageId);
+          }
         }
         yield chunk;
       }
     } finally {
-      if (ctx.metadata.lastResponseMessageId) {
+      if (ctx.metadata.lastResponseMessageId && !lastMsgSaved) {
         updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
+        const conv = conversationCache.get(conversationId);
+        if (conv) {
+          conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
+        }
       }
       if (ctx.metadata.lastRequestMessageId) {
         updateSessionLastRequestId(conversationId, ctx.metadata.lastRequestMessageId as string);
       }
-      conversationCache.set(conversationId, { conversationId, accountId: account.itemId, previousMessages: messages });
-      conversationModel.saveConversation(conversationId, account.itemId, providerName, messages, cumInput, cumOutput);
+      if (!saved) {
+        addRequestToHashCache(hashCache, request.messages, ctx.metadata);
+        conversationCache.set(conversationId, {
+          conversationId, accountId: account.itemId, hashCache, toolsHash: finalToolsHash, lastMessageId,
+        });
+        conversationModel.saveHashCache(conversationId, account.itemId, providerName, hashCache, finalToolsHash, lastMessageId);
+      }
     }
   }
 
   return { stream: wrappedStream(), accountId: account.itemId, conversationId };
 }
 
-// --- Helpers ---
+// --- Hash Helpers ---
 
-interface DiffResult {
-  diffMessages: InternalMessage[];
-  divergedAt: number;
-}
+function computeHashDiff(
+  hashCache: HashCacheMap,
+  requestMessages: InternalMessage[],
+  cachedCount: number,
+  lastMessageId: number | null,
+): { messagesToSend: InternalMessage[]; parentMessageId: number | null; lastMatchedHash: string | null; isFullMatch: boolean; matchedCount: number } {
+  const tracked = filterTrackedMessages(requestMessages);
+  let matchedCount = 0;
+  let lastMatchedHash: string | null = null;
 
-function computeDiff(previous: InternalMessage[], current: InternalMessage[]): DiffResult {
-  if (previous.length === 0) return { diffMessages: current, divergedAt: 0 };
-
-  let divergeIdx = 0;
-  while (
-    divergeIdx < previous.length &&
-    divergeIdx < current.length &&
-    msgEquals(previous[divergeIdx], current[divergeIdx])
-  ) {
-    divergeIdx++;
+  for (let i = 0; i < tracked.length; i++) {
+    const h = hashMessage(tracked[i]);
+    const entry = hashCache[h];
+    if (entry !== undefined) {
+      matchedCount++;
+      lastMatchedHash = h;
+    } else {
+      console.log(
+        `[DIFF] FIRST_MISMATCH at idx=${i}/${tracked.length} role=${tracked[i].role} ` +
+        `hash=${h.slice(0, 12)}... content_preview=${String(tracked[i].content).slice(0, 120).replace(/\n/g, '\\n')}`,
+      );
+      break;
+    }
   }
 
-  return { diffMessages: current.slice(divergeIdx), divergedAt: divergeIdx };
+  if (matchedCount === tracked.length) {
+    // Trường hợp có messages mới nhưng hash trùng với entries cũ
+    // (matchedCount > cachedCount): đây là normal append, không phải full match.
+    // Nếu dùng edit_message sẽ bỏ qua tool results → infinite loop.
+    if (matchedCount > cachedCount) {
+      console.log(
+        `[DIFF] APPEND_WITH_DUP_HASH tracked=${tracked.length} > cached=${cachedCount} ` +
+        `matched=${matchedCount} — sending as new messages`,
+      );
+      const firstNewTracked = tracked[cachedCount];
+      const originalIndex = requestMessages.indexOf(firstNewTracked);
+      const messagesToSend = requestMessages.slice(originalIndex >= 0 ? originalIndex : 0);
+      const parentMessageId = lastMessageId ?? (lastMatchedHash ? (hashCache[lastMatchedHash]?.parent_message_id ?? null) : null);
+      return { messagesToSend, parentMessageId, lastMatchedHash, isFullMatch: false, matchedCount };
+    }
+
+    console.log(
+      `[DIFF] FULL_MATCH tracked=${tracked.length} cached=${cachedCount} ` +
+      `lastMessageId=${lastMessageId}`,
+    );
+    const parentMessageId = lastMessageId ?? (lastMatchedHash ? (hashCache[lastMatchedHash]?.parent_message_id ?? null) : null);
+    return { messagesToSend: [], parentMessageId, lastMatchedHash, isFullMatch: true, matchedCount };
+  }
+
+  // Serial chain: from first non-matching tracked message, bundle all original messages after it
+  const firstNewTracked = tracked[matchedCount];
+  const originalIndex = requestMessages.indexOf(firstNewTracked);
+  const messagesToSend = requestMessages.slice(originalIndex >= 0 ? originalIndex : 0);
+
+  // Normal append (matchedCount === cachedCount): use lastMessageId
+  // Revert (matchedCount < cachedCount): use hash entry's parent_message_id
+  const isRevert = matchedCount < cachedCount;
+  const parentMessageId = isRevert
+    ? (lastMatchedHash ? (hashCache[lastMatchedHash]?.parent_message_id ?? null) : null)
+    : (lastMessageId ?? (lastMatchedHash ? (hashCache[lastMatchedHash]?.parent_message_id ?? null) : null));
+
+  return { messagesToSend, parentMessageId, lastMatchedHash, isFullMatch: false, matchedCount };
 }
 
-function msgEquals(a: InternalMessage, b: InternalMessage): boolean {
-  if (a.role !== b.role) return false;
-  const aContent = typeof a.content === 'string' ? a.content : JSON.stringify(a.content);
-  const bContent = typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
-  return aContent === bContent;
+function pruneHashCache(hashCache: HashCacheMap, lastMatchedHash: string | null): void {
+  if (!lastMatchedHash) {
+    // No matched entries, clear everything
+    for (const key of Object.keys(hashCache)) delete hashCache[key];
+    return;
+  }
+  const anchor = hashCache[lastMatchedHash];
+  if (!anchor) return;
+  for (const key of Object.keys(hashCache)) {
+    if (hashCache[key].request_message_id > anchor.request_message_id) {
+      delete hashCache[key];
+    }
+  }
+}
+
+function addRequestToHashCache(
+  hashCache: HashCacheMap,
+  requestMessages: InternalMessage[],
+  metadata: Record<string, unknown>,
+): void {
+  const tracked = filterTrackedMessages(requestMessages);
+  const parentMessageId = metadata.lastResponseMessageId ? Number(metadata.lastResponseMessageId) : null;
+  const requestMessageId = metadata.lastRequestMessageId ? Number(metadata.lastRequestMessageId) : 0;
+
+  for (const msg of tracked) {
+    const h = hashMessage(msg);
+    if (!hashCache[h]) {
+      hashCache[h] = { parent_message_id: parentMessageId, request_message_id: requestMessageId };
+    }
+  }
+}
+
+function buildHashCacheFromRequest(
+  request: InternalRequest,
+  metadata: Record<string, unknown>,
+): HashCacheMap {
+  const hashCache: HashCacheMap = {};
+  addRequestToHashCache(hashCache, request.messages, metadata);
+  return hashCache;
+}
+
+function buildHashCacheFromMessages(messages: InternalMessage[]): HashCacheMap {
+  const hashCache: HashCacheMap = {};
+  const tracked = filterTrackedMessages(messages);
+  for (const msg of tracked) {
+    const h = hashMessage(msg);
+    if (!hashCache[h]) {
+      hashCache[h] = { parent_message_id: null, request_message_id: 0 };
+    }
+  }
+  return hashCache;
 }

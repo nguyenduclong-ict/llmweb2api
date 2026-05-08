@@ -22,12 +22,21 @@ apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Re
       res.setHeader('Connection', 'keep-alive');
 
       try {
-        const { stream, accountId } = await processChatStream('deepseek', internalReq, useCache);
+        const { stream, accountId, conversationId } = await processChatStream('deepseek', internalReq, useCache);
 
         (req as any).accountId = accountId;
 
+        let firstChunk = true;
         for await (const chunk of stream) {
-          res.write(openaiAdapter.formatStreamChunk(chunk));
+          if (firstChunk && conversationId) {
+            chunk.conversationId = conversationId;
+          }
+          const sseData = openaiAdapter.formatStreamChunk(chunk);
+          if (firstChunk) {
+            console.log(`[SSE] FIRST chunk convId=${conversationId} chunk.conversationId=${(chunk as any).conversationId} data=${sseData.slice(0, 300)}`);
+          }
+          firstChunk = false;
+          res.write(sseData);
         }
         res.write('data: [DONE]\n\n');
       } catch (err: any) {
@@ -66,16 +75,25 @@ apiRoutes.post('/v1/messages', apiPipeline, async (req: Request, res: Response) 
       res.setHeader('Connection', 'keep-alive');
 
       const streamMessageId = `msg_${Date.now()}`;
-      res.write(
-        `event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: streamMessageId, type: 'message', role: 'assistant', model: internalReq.model, content: [] } })}\n\n`,
-      );
 
       try {
-        const { stream, accountId } = await processChatStream('deepseek', internalReq, useCache);
+        const { stream, accountId, conversationId } = await processChatStream('deepseek', internalReq, useCache);
 
         (req as any).accountId = accountId;
 
+        const msgStart: Record<string, unknown> = { type: 'message_start', message: { id: streamMessageId, type: 'message', role: 'assistant', model: internalReq.model, content: [] } };
+        if (conversationId) {
+          (msgStart as any).conversation_id = conversationId;
+          (msgStart.message as any).conversation_id = conversationId;
+        }
+        res.write(`event: message_start\ndata: ${JSON.stringify(msgStart)}\n\n`);
+
+        let firstChunk = true;
         for await (const chunk of stream) {
+          if (firstChunk && conversationId) {
+            chunk.conversationId = conversationId;
+          }
+          firstChunk = false;
           res.write(anthropicAdapter.formatStreamChunk(chunk));
         }
       } catch (err: any) {
@@ -114,11 +132,16 @@ apiRoutes.post('/v1/models/:modelModel', apiPipeline, async (req: Request, res: 
       res.setHeader('Connection', 'keep-alive');
 
       try {
-        const { stream, accountId } = await processChatStream('deepseek', internalReq, useCache);
+        const { stream, accountId, conversationId } = await processChatStream('deepseek', internalReq, useCache);
 
         (req as any).accountId = accountId;
 
+        let firstChunk = true;
         for await (const chunk of stream) {
+          if (firstChunk && conversationId) {
+            chunk.conversationId = conversationId;
+          }
+          firstChunk = false;
           res.write(geminiAdapter.formatStreamChunk(chunk));
         }
       } catch (err: any) {

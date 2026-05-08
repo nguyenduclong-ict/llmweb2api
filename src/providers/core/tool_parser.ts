@@ -51,11 +51,102 @@ function parseCodeToJson(body: string, debugCtx?: string): Record<string, unknow
     // fall through
   }
 
+  // Fix backslash escaping (e.g. Windows paths in double-quoted strings)
+  const backslashFixed = fixYamlBackslashes(content);
+  if (backslashFixed !== content) {
+    try {
+      const obj = yamlParse(backslashFixed, { strict: false });
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
+    } catch {
+      // fall through
+    }
+  }
+
+  // Fallback: fix unindented continuation lines — model sometimes outputs
+  // multi-line values without YAML | literal scalar, breaking indentation.
+  const fixed = fixYamlContinuations(content);
+  if (fixed !== content) {
+    try {
+      const obj = yamlParse(fixed, { strict: false });
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
+    } catch {
+      // fall through
+    }
+  }
+
   if (debugCtx) {
     console.error(`[TOOL_PARSER] parseCodeToJson failed. ${debugCtx}`);
     console.error(`[TOOL_PARSER] Content (${content.length} chars):`, content.slice(0, 500));
   }
   return null;
+}
+
+// Fix unescaped backslashes inside YAML double-quoted strings.
+// Windows paths like "C:\Users\..." contain \U, \A, etc. which are
+// invalid YAML escape sequences and cause parse failures.
+function fixYamlBackslashes(yaml: string): string {
+  // Only applies to double-quoted strings where \ is an escape char.
+  // Unquoted scalars treat \ literally and don't need fixing.
+  if (!yaml.includes('"')) return yaml;
+
+  const validSimple = new Set(['\\', '"', 'n', 'r', 'b', 't', 'f', '/', ' ']);
+  let result = '';
+  let inDQ = false;
+  for (let i = 0; i < yaml.length; i++) {
+    const ch = yaml[i];
+    if (!inDQ) {
+      result += ch;
+      if (ch === '"') inDQ = true;
+      continue;
+    }
+    if (ch === '\\') {
+      const next = yaml[i + 1];
+      if (!next) { result += '\\\\'; continue; }
+      if (validSimple.has(next)) { result += '\\' + next; i++; continue; }
+      if (next === 'x' && /^[0-9a-fA-F]{2}/.test(yaml.slice(i + 2, i + 4))) { result += yaml.slice(i, i + 4); i += 3; continue; }
+      if (next === 'u' && /^[0-9a-fA-F]{4}/.test(yaml.slice(i + 2, i + 6))) { result += yaml.slice(i, i + 6); i += 5; continue; }
+      if (next === 'U' && /^[0-9a-fA-F]{8}/.test(yaml.slice(i + 2, i + 10))) { result += yaml.slice(i, i + 10); i += 9; continue; }
+      // Invalid escape (e.g. \U without 8 hex digits) → literal backslash
+      result += '\\\\';
+      continue;
+    }
+    if (ch === '"') { inDQ = false; }
+    result += ch;
+  }
+  return result;
+}
+
+// Fix lines that break YAML indentation: when a line at column 0 follows
+// an indented block, it's likely a continuation of the previous value.
+function fixYamlContinuations(yaml: string): string {
+  const lines = yaml.split('\n');
+  const out: string[] = [];
+  let needFix = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimEnd();
+    if (trimmed === '' || trimmed.startsWith('#')) {
+      out.push(trimmed);
+      continue;
+    }
+
+    const indent = trimmed.length - trimmed.trimStart().length;
+    const hasColon = /:\s/.test(trimmed) || trimmed.endsWith(':');
+
+    // Line at column 0, not a key:value, preceded by indented content → continuation
+    if (i > 0 && indent === 0 && !hasColon) {
+      const prevOut = out[out.length - 1];
+      const prevIndent = prevOut.length - prevOut.trimStart().length;
+      const fixIndent = prevIndent + 2;
+      out.push(' '.repeat(fixIndent) + trimmed);
+      needFix = true;
+    } else {
+      out.push(trimmed);
+    }
+  }
+
+  return needFix ? out.join('\n') : yaml;
 }
 
 function parseCodeToToolCall(body: string, debugCtx?: string): ParsedToolCall | null {
@@ -121,42 +212,68 @@ export function parseToolCallBlock(body: string): ParsedToolCall[] {
 
 function extractMarkerBlocks(text: string): ParsedToolCall[] {
   const results: ParsedToolCall[] = [];
-  let remaining = text;
+  const lines = text.split('\n');
 
-  while (true) {
-    const startIdx = remaining.indexOf(START_MARKER);
-    if (startIdx < 0) break;
+  // Scan line-by-line: only markers at line-start (column 0) count.
+  // Markers inside YAML literal blocks (indented) are ignored.
+  let depth = 0;
+  let blockStartLine = -1;
+  const bodyLines: string[] = [];
 
-    const afterStart = remaining.slice(startIdx + START_MARKER.length);
-    let endIdx = afterStart.indexOf(END_MARKER);
-    const nextStart = afterStart.indexOf(START_MARKER);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
 
-    // If a START_MARKER appears before the END_MARKER (or no END_MARKER at all),
-    // the END_MARKER belongs to a later block → implicit close at START_MARKER.
-    if (nextStart >= 0 && (endIdx < 0 || nextStart < endIdx)) {
-      endIdx = nextStart;
-    } else if (endIdx < 0) {
-      // No END_MARKER and no next START_MARKER → close at end of text
-      endIdx = afterStart.length;
+    if (line.startsWith(START_MARKER)) {
+      if (depth > 0) {
+        // Implicit close: new START before END → flush current block
+        const body = bodyLines.join('\n');
+        bodyLines.length = 0;
+        const parsed = parseCodeToToolCall(body, `block #${results.length + 1}`);
+        if (parsed) {
+          results.push(parsed);
+        } else if (body.trim()) {
+          console.error(`[TOOL_PARSER] Marker block #${results.length + 1} implicit close, parse failed.`);
+          console.error('[TOOL_PARSER] Full body:', body.slice(0, 500));
+        }
+        depth = 0;
+      }
+      depth = 1;
+      blockStartLine = i;
+      continue;
     }
 
-    const body = afterStart.slice(0, endIdx);
-    const afterBody = afterStart.slice(endIdx);
-
-    // Advance past body + end marker (or stay at next start for next iteration)
-    if (afterBody.startsWith(END_MARKER)) {
-      remaining = afterBody.slice(END_MARKER.length);
-    } else {
-      remaining = afterBody;
+    if (line.startsWith(END_MARKER)) {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && blockStartLine >= 0) {
+          const body = bodyLines.join('\n');
+          bodyLines.length = 0;
+          const parsed = parseCodeToToolCall(body, `block #${results.length + 1}`);
+          if (parsed) {
+            results.push(parsed);
+          } else if (body.trim()) {
+            console.error(`[TOOL_PARSER] Marker block #${results.length + 1} found but failed to parse.`);
+            console.error('[TOOL_PARSER] Full body:', body.slice(0, 500));
+          }
+        }
+      }
+      continue;
     }
 
+    if (depth > 0) {
+      bodyLines.push(line);
+    }
+  }
+
+  // Flush remaining block at end of text (no closing marker)
+  if (depth > 0) {
+    const body = bodyLines.join('\n');
     const parsed = parseCodeToToolCall(body, `block #${results.length + 1}`);
     if (parsed) {
       results.push(parsed);
     } else if (body.trim()) {
-      console.error(`[TOOL_PARSER] Marker block #${results.length + 1} found but failed to parse.`);
-      console.error('[TOOL_PARSER] Full body:', body);
-      console.error('[TOOL_PARSER] Full input text:', text);
+      console.error(`[TOOL_PARSER] Marker block #${results.length + 1} unclosed, parse failed.`);
+      console.error('[TOOL_PARSER] Full body:', body.slice(0, 500));
     }
   }
 

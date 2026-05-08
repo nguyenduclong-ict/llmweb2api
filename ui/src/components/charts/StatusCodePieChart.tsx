@@ -1,86 +1,76 @@
-import { useState } from "react";
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import {
-  statusCodeData,
-  groupedStatusCodeData,
-  totalRequestCount,
-  formatNumber,
-} from "../../data/mockData";
-import CustomChartTooltip from "./CustomChartTooltip";
+import { useState, useEffect } from 'react';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { apiGet } from '../../api/client';
+import { CardFooter } from '../ui/card';
 
-type ViewMode = "detail" | "grouped";
+interface StatusCodeItem {
+  code: number;
+  label: string;
+  count: number;
+  color: string;
+}
+
+interface StatusCodeResponse {
+  detailed: StatusCodeItem[];
+  grouped: StatusCodeItem[];
+  total: number;
+}
 
 export default function StatusCodePieChart() {
-  const [viewMode, setViewMode] = useState<ViewMode>("detail");
-  const data = viewMode === "detail" ? statusCodeData : groupedStatusCodeData;
+  const [grouped, setGrouped] = useState(false);
+  const [statusData, setStatusData] = useState<StatusCodeResponse | null>(null);
+
+  useEffect(() => {
+    apiGet<StatusCodeResponse>('/api/stats/status-codes')
+      .then(setStatusData)
+      .catch(() => setStatusData(null));
+  }, []);
+
+  const data = statusData ? (grouped ? statusData.grouped : statusData.detailed) : [];
+
+  const total = statusData?.total ?? 0;
 
   return (
-    <div className="relative">
-      {/* Toggle */}
-      <div className="absolute top-0 right-0 z-10 flex rounded-md bg-muted p-0.5 text-xs">
+    <>
+      <div className="flex justify-end gap-1 mb-2">
         <button
-          type="button"
-          className={`px-2.5 py-1 rounded-sm transition-colors ${
-            viewMode === "detail"
-              ? "bg-white text-foreground shadow-sm font-medium"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-          onClick={() => setViewMode("detail")}
+          onClick={() => setGrouped(false)}
+          className={`px-2 py-1 text-xs rounded ${!grouped ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
         >
-          Detail
+          Detailed
         </button>
         <button
-          type="button"
-          className={`px-2.5 py-1 rounded-sm transition-colors ${
-            viewMode === "grouped"
-              ? "bg-white text-foreground shadow-sm font-medium"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-          onClick={() => setViewMode("grouped")}
+          onClick={() => setGrouped(true)}
+          className={`px-2 py-1 text-xs rounded ${grouped ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
         >
           Grouped
         </button>
       </div>
-
-      <ResponsiveContainer width="100%" height={300}>
+      <ResponsiveContainer width="100%" height={240}>
         <PieChart>
           <Pie
             data={data}
-            dataKey="count"
-            nameKey="label"
             cx="50%"
             cy="50%"
             innerRadius={55}
-            outerRadius={95}
+            outerRadius={90}
             paddingAngle={2}
+            dataKey="count"
+            nameKey="label"
           >
             {data.map((entry, index) => (
-              <Cell key={entry.label + index} fill={entry.color} />
+              <Cell key={index} fill={entry.color} />
             ))}
           </Pie>
-          <Tooltip content={<CustomChartTooltip showShare />} />
-          <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
-          {/* Total in center */}
-          <text
-            x="50%"
-            y="47%"
-            textAnchor="middle"
-            dominantBaseline="middle"
-            style={{ fontSize: 20, fontWeight: 700, fill: "#111827" }}
-          >
-            {formatNumber(totalRequestCount)}
-          </text>
-          <text
-            x="50%"
-            y="54%"
-            textAnchor="middle"
-            dominantBaseline="middle"
-            style={{ fontSize: 10, fill: "#9ca3af" }}
-          >
-            requests
-          </text>
+          <Tooltip formatter={(value: number) => value.toLocaleString()} />
+          <Legend />
         </PieChart>
       </ResponsiveContainer>
-    </div>
+      <CardFooter className="justify-center pt-0">
+        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold bg-secondary text-secondary-foreground">
+          Total: {total.toLocaleString()} requests
+        </span>
+      </CardFooter>
+    </>
   );
 }

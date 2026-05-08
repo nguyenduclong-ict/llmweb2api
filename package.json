@@ -8,6 +8,8 @@
     "build": "tsc && node scripts/copy_pow_assets.js && cd ui && pnpm build",
     "start": "node dist/index.js",
     "dev:ui": "cd ui && pnpm dev",
+    "build:backend": "tsc && node scripts/copy_pow_assets.js",
+    "build+start:backend": "pnpm build:backend && pnpm start",
     "build-and-start": "pnpm build && pnpm start",
     "build:ui": "cd ui && pnpm build",
     "lint": "eslint src/",

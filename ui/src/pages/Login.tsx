@@ -1,41 +1,41 @@
-import { useState } from "react";
-import { Button } from "../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
-import { Zap, Loader2 } from "lucide-react";
+import { useState } from 'react';
+import { Button } from '../components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Zap, Loader2 } from 'lucide-react';
 
 interface LoginProps {
   onLogin: (password: string) => void;
 }
 
 export default function Login({ onLogin }: LoginProps) {
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!password.trim()) {
-      setError("Password is required");
+      setError('Password is required');
       return;
     }
-    setError("");
+    setError('');
     setLoading(true);
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data.error || "Invalid password");
+        setError(data.error || 'Invalid password');
         return;
       }
       onLogin(password);
     } catch {
-      setError("Network error. Please try again.");
+      setError('Network error. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -63,7 +63,7 @@ export default function Login({ onLogin }: LoginProps) {
                 value={password}
                 onChange={(e) => {
                   setPassword(e.target.value);
-                  setError("");
+                  setError('');
                 }}
                 placeholder="Enter dashboard password"
                 autoFocus

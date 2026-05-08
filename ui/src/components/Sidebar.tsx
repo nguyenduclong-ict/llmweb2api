@@ -1,13 +1,13 @@
-import { NavLink } from "react-router-dom";
-import { Settings, Key, BarChart3, FileText, Zap, Server } from "lucide-react";
-import { cn } from "../lib/utils";
+import { NavLink } from 'react-router-dom';
+import { Settings, Key, BarChart3, FileText, Zap, Server } from 'lucide-react';
+import { cn } from '../lib/utils';
 
 const links = [
-  { to: "/providers", label: "Providers", icon: Server },
-  { to: "/api-keys", label: "API Keys", icon: Key },
-  { to: "/analysis", label: "Analysis", icon: BarChart3 },
-  { to: "/logs", label: "Logs", icon: FileText },
-  { to: "/settings", label: "Settings", icon: Settings },
+  { to: '/providers', label: 'Providers', icon: Server },
+  { to: '/api-keys', label: 'API Keys', icon: Key },
+  { to: '/analysis', label: 'Analysis', icon: BarChart3 },
+  { to: '/logs', label: 'Logs', icon: FileText },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
 export default function Sidebar() {
@@ -26,10 +26,10 @@ export default function Sidebar() {
             to={link.to}
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
                 isActive
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
               )
             }
           >

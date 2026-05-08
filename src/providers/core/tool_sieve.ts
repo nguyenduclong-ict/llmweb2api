@@ -126,6 +126,8 @@ export class ToolSieve {
       } else if (body.trim()) {
         console.error('[TOOL_SIEVE] Captured tool_call block but failed to parse.');
         console.error('[TOOL_SIEVE] Body:', body);
+        // Emit as text so client sees the raw block — prevents conversation state mismatch
+        events.push({ type: 'content', text: START_MARKER + '\n' + body + '\n' + END_MARKER });
       }
       continue;
     }

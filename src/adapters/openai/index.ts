@@ -76,8 +76,7 @@ export const openaiAdapter: Adapter = {
         `[ADAPTER] Detected conversationId=${conversationId} from ${body.conversation_id ? 'body' : 'message field'}`,
       );
     }
-
-    console.log('[ADAPTER] tools:', body.tools ? `${body.tools.length} tools` : 'none', 'stream:', body.stream);
+    console.log(`[ADAPTER] request: convId=${conversationId || '<none>'} stream=${body.stream} tools=${body.tools ? body.tools.length : 0} msgs=${messages.length}`);
 
     return {
       model: resolved.responseModel,
@@ -97,6 +96,10 @@ export const openaiAdapter: Adapter = {
 
   formatResponse(internal: InternalResponse): unknown {
     const message: Record<string, unknown> = { role: 'assistant' };
+
+    if (internal.conversationId) {
+      message.conversation_id = internal.conversationId;
+    }
 
     if (internal.reasoningContent) {
       message.reasoning_content = internal.reasoningContent;
@@ -165,6 +168,10 @@ export const openaiAdapter: Adapter = {
       if (chunk.reasoningContent) delta.reasoning_content = chunk.reasoningContent;
     }
 
+    if (chunk.conversationId) {
+      delta.conversation_id = chunk.conversationId;
+    }
+
     const choice: Record<string, unknown> = {
       index: 0,
       delta,
@@ -187,6 +194,10 @@ export const openaiAdapter: Adapter = {
         completion_tokens: outTok,
         total_tokens: inTok + outTok,
       };
+    }
+
+    if (chunk.conversationId) {
+      data.conversation_id = chunk.conversationId;
     }
 
     return `data: ${JSON.stringify(data)}\n\n`;
