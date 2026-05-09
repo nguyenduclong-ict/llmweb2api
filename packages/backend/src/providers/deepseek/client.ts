@@ -399,6 +399,7 @@ export async function* streamCompletionLines(
   token: string,
   powResponse: string,
   payload: DeepSeekCompletionPayload,
+  signal?: AbortSignal,
 ): AsyncGenerator<string> {
   const headers = {
     ...authHeaders(token),
@@ -409,7 +410,10 @@ export async function* streamCompletionLines(
     headers,
     responseType: 'stream',
     validateStatus: () => true,
+    signal,
   });
+
+  if (signal?.aborted) return;
 
   if (response.status !== 200) {
     console.error(`[STREAM] HTTP ${response.status}: ${JSON.stringify(response.data).slice(0, 200)}`);
@@ -420,6 +424,10 @@ export async function* streamCompletionLines(
   let buffer = '';
 
   for await (const chunk of stream) {
+    if (signal?.aborted) {
+      (stream as any).destroy();
+      return;
+    }
     buffer += chunk.toString();
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
@@ -430,7 +438,7 @@ export async function* streamCompletionLines(
     }
   }
 
-  if (buffer.startsWith('data:')) {
+  if (!signal?.aborted && buffer.startsWith('data:')) {
     yield buffer;
   }
 }
@@ -447,6 +455,7 @@ export async function* streamEditMessageLines(
   token: string,
   powResponse: string,
   payload: EditMessagePayload,
+  signal?: AbortSignal,
 ): AsyncGenerator<string> {
   const headers = {
     ...authHeaders(token),
@@ -457,7 +466,10 @@ export async function* streamEditMessageLines(
     headers,
     responseType: 'stream',
     validateStatus: () => true,
+    signal,
   });
+
+  if (signal?.aborted) return;
 
   if (response.status !== 200) {
     console.error(`[EDIT] HTTP ${response.status}: ${JSON.stringify(response.data).slice(0, 200)}`);
@@ -468,6 +480,10 @@ export async function* streamEditMessageLines(
   let buffer = '';
 
   for await (const chunk of stream) {
+    if (signal?.aborted) {
+      (stream as any).destroy();
+      return;
+    }
     buffer += chunk.toString();
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
@@ -478,8 +494,21 @@ export async function* streamEditMessageLines(
     }
   }
 
-  if (buffer.startsWith('data:')) {
+  if (!signal?.aborted && buffer.startsWith('data:')) {
     yield buffer;
+  }
+}
+
+export async function stopStream(token: string, sessionId: string, messageId: string | number): Promise<void> {
+  try {
+    await fetch(DEEPSEEK_URLS.stopStream, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({ chat_session_id: sessionId, message_id: Number(messageId) }),
+    });
+    console.log(`[STOP_STREAM] session=${sessionId.slice(0, 12)} message=${messageId}`);
+  } catch (err) {
+    console.error(`[STOP_STREAM] Failed: ${(err as Error).message}`);
   }
 }
 

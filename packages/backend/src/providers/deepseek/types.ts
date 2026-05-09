@@ -79,6 +79,7 @@ export const DEEPSEEK_URLS = {
   createPow: `https://${DEEPSEEK_HOST}/api/v0/chat/create_pow_challenge`,
   completion: `https://${DEEPSEEK_HOST}/api/v0/chat/completion`,
   deleteSession: `https://${DEEPSEEK_HOST}/api/v0/chat_session/delete`,
+  stopStream: `https://${DEEPSEEK_HOST}/api/v0/chat/stop_stream`,
   uploadFile: `https://${DEEPSEEK_HOST}/api/v0/file/upload_file`,
   fetchFiles: `https://${DEEPSEEK_HOST}/api/v0/file/fetch_files`,
   editMessage: `https://${DEEPSEEK_HOST}/api/v0/chat/edit_message`,

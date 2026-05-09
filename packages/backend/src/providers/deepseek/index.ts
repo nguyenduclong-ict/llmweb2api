@@ -147,7 +147,7 @@ class DeepSeekProvider implements Provider {
     };
   }
 
-  async *chatStream(ctx: SessionContext, request: InternalRequest): AsyncGenerator<InternalStreamChunk> {
+  async *chatStream(ctx: SessionContext, request: InternalRequest, signal?: AbortSignal): AsyncGenerator<InternalStreamChunk> {
     const editMessageId = ctx.metadata.editMessageId as number | undefined;
 
     // Regeneration via edit_message
@@ -177,7 +177,9 @@ class DeepSeekProvider implements Provider {
       let hasToolCalls = false;
       const sieve = new ToolSieve();
 
-      for await (const line of client.streamEditMessageLines(ctx.token, powResponse, editPayload)) {
+      try {
+        for await (const line of client.streamEditMessageLines(ctx.token, powResponse, editPayload, signal)) {
+          if (signal?.aborted) return;
         const raw = line.slice(5).trim();
         if (!raw) continue;
         if (raw.indexOf('FINISHED') >= 0 && raw.indexOf('response/status') >= 0) break;
@@ -253,7 +255,14 @@ class DeepSeekProvider implements Provider {
         } catch {
           continue;
         }
+        }
+      } finally {
+        if (signal?.aborted && ctx.metadata.lastResponseMessageId) {
+          client.stopStream(ctx.token, ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
+        }
       }
+
+      if (signal?.aborted) return;
 
       // Flush
       const flushEvents = sieve.flush();
@@ -284,9 +293,11 @@ class DeepSeekProvider implements Provider {
     }
 
     // Normal completion flow
+    if (signal?.aborted) return;
     const forceTools = ctx.metadata.toolsChanged === true;
     const isRestoredSession = ctx.metadata.isRestoredSession === true;
     const { prompt, refFileIds } = await this.buildPromptAndFiles(ctx.token, ctx.sessionId, request, forceTools, isRestoredSession);
+    if (signal?.aborted) return;
     const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/completion');
     const parentMessageId = ctx.metadata.parentMessageId ? Number(ctx.metadata.parentMessageId) : null;
     const payload: DeepSeekCompletionPayload = {
@@ -307,7 +318,9 @@ class DeepSeekProvider implements Provider {
     let hasToolCalls = false;
     const sieve = new ToolSieve();
 
-    for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload)) {
+    try {
+      for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, signal)) {
+        if (signal?.aborted) return;
       const raw = line.slice(5).trim();
       if (!raw) continue;
       if (raw.indexOf('FINISHED') >= 0 && raw.indexOf('response/status') >= 0) break;
@@ -382,7 +395,14 @@ class DeepSeekProvider implements Provider {
       } catch {
         continue;
       }
+      }
+    } finally {
+      if (signal?.aborted && ctx.metadata.lastResponseMessageId) {
+        client.stopStream(ctx.token, ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
+      }
     }
+
+    if (signal?.aborted) return;
 
     // Flush remaining sieved content
     const flushEvents = sieve.flush();

@@ -11,18 +11,36 @@ export const apiRoutes: Router = Router();
 
 const apiPipeline = [authMiddleware, loggerMiddleware, rateLimitMiddleware];
 
+function safeWrite(res: Response, data: string): boolean {
+  try {
+    if (!res.writableEnded) {
+      res.write(data);
+      return true;
+    }
+  } catch {
+    // Client disconnected
+  }
+  return false;
+}
+
 apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Response) => {
   try {
     const internalReq = openaiAdapter.parseRequest(req.body);
     const useCache: boolean = !!(req as any).apiKeyCache;
 
     if (req.body.stream) {
+      const controller = new AbortController();
+      res.on('close', () => {
+        controller.abort();
+        console.log('[SSE] Client disconnected, aborting stream');
+      });
+
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
       try {
-        const { stream, accountId, conversationId } = await processChatStream('deepseek', internalReq, useCache);
+        const { stream, accountId, conversationId } = await processChatStream('deepseek', internalReq, useCache, controller.signal);
 
         (req as any).accountId = accountId;
 
@@ -36,11 +54,13 @@ apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Re
             console.log(`[SSE] FIRST chunk convId=${conversationId} chunk.conversationId=${(chunk as any).conversationId} data=${sseData.slice(0, 300)}`);
           }
           firstChunk = false;
-          res.write(sseData);
+          if (!safeWrite(res, sseData)) break;
         }
-        res.write('data: [DONE]\n\n');
+        safeWrite(res, 'data: [DONE]\n\n');
       } catch (err: any) {
-        console.error(`[API_ERROR] ${req.method} ${req.originalUrl}:`, err.message || String(err));
+        if (err?.message !== 'canceled') {
+          console.error(`[API_ERROR] ${req.method} ${req.originalUrl}:`, err.message || String(err));
+        }
         if (!res.headersSent) {
           res.status(500).json({ error: err.message || 'Internal error' });
           return;
@@ -70,6 +90,12 @@ apiRoutes.post('/v1/messages', apiPipeline, async (req: Request, res: Response) 
     const internalReq = anthropicAdapter.parseRequest(req.body);
     const useCache: boolean = !!(req as any).apiKeyCache;
     if (req.body.stream) {
+      const controller = new AbortController();
+      res.on('close', () => {
+        controller.abort();
+        console.log('[SSE] Client disconnected, aborting stream');
+      });
+
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
@@ -77,7 +103,7 @@ apiRoutes.post('/v1/messages', apiPipeline, async (req: Request, res: Response) 
       const streamMessageId = `msg_${Date.now()}`;
 
       try {
-        const { stream, accountId, conversationId } = await processChatStream('deepseek', internalReq, useCache);
+        const { stream, accountId, conversationId } = await processChatStream('deepseek', internalReq, useCache, controller.signal);
 
         (req as any).accountId = accountId;
 
@@ -86,7 +112,7 @@ apiRoutes.post('/v1/messages', apiPipeline, async (req: Request, res: Response) 
           (msgStart as any).conversation_id = conversationId;
           (msgStart.message as any).conversation_id = conversationId;
         }
-        res.write(`event: message_start\ndata: ${JSON.stringify(msgStart)}\n\n`);
+        safeWrite(res, `event: message_start\ndata: ${JSON.stringify(msgStart)}\n\n`);
 
         let firstChunk = true;
         for await (const chunk of stream) {
@@ -94,10 +120,12 @@ apiRoutes.post('/v1/messages', apiPipeline, async (req: Request, res: Response) 
             chunk.conversationId = conversationId;
           }
           firstChunk = false;
-          res.write(anthropicAdapter.formatStreamChunk(chunk));
+          if (!safeWrite(res, anthropicAdapter.formatStreamChunk(chunk))) break;
         }
       } catch (err: any) {
-        console.error(`[API_ERROR] ${req.method} ${req.originalUrl}:`, err.message || String(err));
+        if (err?.message !== 'canceled') {
+          console.error(`[API_ERROR] ${req.method} ${req.originalUrl}:`, err.message || String(err));
+        }
         if (!res.headersSent) {
           res.status(500).json({ error: err.message || 'Internal error' });
           return;
@@ -127,12 +155,18 @@ apiRoutes.post('/v1/models/:modelModel', apiPipeline, async (req: Request, res: 
     const internalReq = geminiAdapter.parseRequest(req.body);
     const useCache: boolean = !!(req as any).apiKeyCache;
     if (req.body.stream) {
+      const controller = new AbortController();
+      res.on('close', () => {
+        controller.abort();
+        console.log('[SSE] Client disconnected, aborting stream');
+      });
+
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
       try {
-        const { stream, accountId, conversationId } = await processChatStream('deepseek', internalReq, useCache);
+        const { stream, accountId, conversationId } = await processChatStream('deepseek', internalReq, useCache, controller.signal);
 
         (req as any).accountId = accountId;
 
@@ -142,10 +176,12 @@ apiRoutes.post('/v1/models/:modelModel', apiPipeline, async (req: Request, res: 
             chunk.conversationId = conversationId;
           }
           firstChunk = false;
-          res.write(geminiAdapter.formatStreamChunk(chunk));
+          if (!safeWrite(res, geminiAdapter.formatStreamChunk(chunk))) break;
         }
       } catch (err: any) {
-        console.error(`[API_ERROR] ${req.method} ${req.originalUrl}:`, err.message || String(err));
+        if (err?.message !== 'canceled') {
+          console.error(`[API_ERROR] ${req.method} ${req.originalUrl}:`, err.message || String(err));
+        }
         if (!res.headersSent) {
           res.status(500).json({ error: err.message || 'Internal error' });
           return;

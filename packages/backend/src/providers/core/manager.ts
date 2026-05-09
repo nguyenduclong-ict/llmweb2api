@@ -55,6 +55,10 @@ function updateSessionLastRequestId(conversationId: string, lastRequestMessageId
 
 // --- No-Cache Flow ---
 
+function emptyStream(): AsyncGenerator<InternalStreamChunk> {
+  return (async function* () {} )();
+}
+
 export async function processChat(
   providerName: string,
   request: InternalRequest,
@@ -92,16 +96,18 @@ export async function processChatStream(
   providerName: string,
   request: InternalRequest,
   useCache?: boolean,
+  signal?: AbortSignal,
 ): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
   console.log(`[FLOW] processChatStream: useCache=${useCache} convId=${request.conversationId || '<none>'} model=${request.model}`);
 
   if (useCache) {
-    return processChatStreamWithCache(providerName, request, request.conversationId);
+    return processChatStreamWithCache(providerName, request, request.conversationId, signal);
   }
 
   const provider = ensureProvider(providerName);
   const isNew = !request.conversationId;
   console.log(`[FLOW] processChatStream non-cache: isNew=${isNew} convId=${request.conversationId || '<none>'}`);
+  if (signal?.aborted) return { stream: emptyStream(), accountId: 0, conversationId: '' };
   const ctx = isNew
     ? await createSession(provider, await selectAccount(providerName))
     : await reuseSession(providerName, request.conversationId!);
@@ -111,11 +117,12 @@ export async function processChatStream(
     saveSession(ctx.sessionId, ctx.sessionId, ctx.accountId);
   }
 
-  const innerStream = provider.chatStream(ctx, request);
+  const innerStream = provider.chatStream(ctx, request, signal);
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
     try {
       for await (const chunk of innerStream) {
+        if (signal?.aborted) return;
         yield chunk;
       }
     } finally {
@@ -193,11 +200,12 @@ export async function processChatStreamWithCache(
   providerName: string,
   request: InternalRequest,
   conversationId?: string,
+  signal?: AbortSignal,
 ): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
   if (conversationId) {
-    return processCachedChatStream(providerName, request, conversationId);
+    return processCachedChatStream(providerName, request, conversationId, signal);
   }
-  return processFirstCachedChatStream(providerName, request);
+  return processFirstCachedChatStream(providerName, request, signal);
 }
 
 export async function dumpConversation(conversationId: string): Promise<void> {
@@ -387,14 +395,18 @@ async function processFirstCachedChat(
 async function processFirstCachedChatStream(
   providerName: string,
   request: InternalRequest,
+  signal?: AbortSignal,
 ): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
   const provider = ensureProvider(providerName);
   const account = await selectAccount(providerName);
+  if (signal?.aborted) {
+    return { stream: emptyStream(), accountId: account.itemId, conversationId: '' };
+  }
   const ctx = await createSession(provider, account);
   ctx.metadata.conversationId = ctx.sessionId;
   saveSession(ctx.sessionId, ctx.sessionId, account.itemId);
 
-  const innerStream = provider.chatStream(ctx, request);
+  const innerStream = provider.chatStream(ctx, request, signal);
   const toolsHash = hashTools(request.tools as unknown[] | undefined);
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
@@ -402,6 +414,7 @@ async function processFirstCachedChatStream(
     let lastMsgSaved = false;
     try {
       for await (const chunk of innerStream) {
+        if (signal?.aborted) return;
         if (!saved) {
           saved = true;
           const lastMessageId = ctx.metadata.lastResponseMessageId ? Number(ctx.metadata.lastResponseMessageId) : null;
@@ -567,6 +580,7 @@ async function processCachedChatStream(
   providerName: string,
   request: InternalRequest,
   conversationId: string,
+  signal?: AbortSignal,
 ): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
   const cached = conversationCache.get(conversationId);
 
@@ -580,10 +594,10 @@ async function processCachedChatStream(
         return processFirstCachedChatStream(providerName, request);
       }
       console.log(`[FLOW] processCachedChatStream: ${conversationId} found legacy messages in DB → restore legacy`);
-      return handleDbRestoreChatStream(providerName, request, conversationId, dbMessages);
+      return handleDbRestoreChatStream(providerName, request, conversationId, dbMessages, signal);
     }
     console.log(`[FLOW] processCachedChatStream: ${conversationId} found hashCache in DB → restore with hash`);
-    return handleDbRestoreStreamWithHash(providerName, request, conversationId, hashCache);
+    return handleDbRestoreStreamWithHash(providerName, request, conversationId, hashCache, signal);
   }
 
   // Capture reference for closures
@@ -609,7 +623,7 @@ async function processCachedChatStream(
     ctx.metadata.editMessageId = lastReqId ? Number(lastReqId) : undefined;
     ctx.metadata.conversationId = conversationId;
 
-    const innerStream = provider.chatStream(ctx, request);
+    const innerStream = provider.chatStream(ctx, request, signal);
     const accountId = conv.accountId;
 
     async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
@@ -617,6 +631,7 @@ async function processCachedChatStream(
       let lastMsgSaved = false;
       try {
         for await (const chunk of innerStream) {
+          if (signal?.aborted) return;
           if (!saved) {
             saved = true;
             if (toolsChanged) conv.toolsHash = newToolsHash;
@@ -672,7 +687,7 @@ async function processCachedChatStream(
     ctx.metadata.parentMessageId = diff.parentMessageId;
     ctx.metadata.conversationId = conversationId;
 
-    const innerStream = provider.chatStream(ctx, request);
+    const innerStream = provider.chatStream(ctx, request, signal);
     const accountId = conv.accountId;
 
     async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
@@ -680,6 +695,7 @@ async function processCachedChatStream(
       let lastMsgSaved = false;
       try {
         for await (const chunk of innerStream) {
+          if (signal?.aborted) return;
           if (!saved) {
             saved = true;
             addRequestToHashCache(conv.hashCache, request.messages, ctx.metadata);
@@ -725,7 +741,7 @@ async function processCachedChatStream(
   ctx.metadata.conversationId = conversationId;
 
   const diffRequest: InternalRequest = { ...request, messages: diff.messagesToSend };
-  const innerStream = provider.chatStream(ctx, diffRequest);
+  const innerStream = provider.chatStream(ctx, diffRequest, signal);
   const accountId = conv.accountId;
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
@@ -733,6 +749,7 @@ async function processCachedChatStream(
     let lastMsgSaved = false;
     try {
       for await (const chunk of innerStream) {
+        if (signal?.aborted) return;
         if (!saved) {
           saved = true;
           addRequestToHashCache(conv.hashCache, request.messages, ctx.metadata);
@@ -813,10 +830,11 @@ async function handleDbRestoreChatStream(
   request: InternalRequest,
   conversationId: string,
   dbMessages: InternalMessage[],
+  signal?: AbortSignal,
 ): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
   // Migrate legacy messages → hash cache, then delegate to hash handler
   const hashCache = buildHashCacheFromMessages(dbMessages);
-  return handleDbRestoreStreamWithHash(providerName, request, conversationId, hashCache);
+  return handleDbRestoreStreamWithHash(providerName, request, conversationId, hashCache, signal);
 }
 
 async function handleDbRestoreWithHash(
@@ -894,6 +912,7 @@ async function handleDbRestoreStreamWithHash(
   request: InternalRequest,
   conversationId: string,
   hashCache: HashCacheMap,
+  signal?: AbortSignal,
 ): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
   const provider = ensureProvider(providerName);
   const cachedCount = Object.keys(hashCache).length;
@@ -917,13 +936,14 @@ async function handleDbRestoreStreamWithHash(
     ctx.metadata.editMessageId = lastReqId ? Number(lastReqId) : undefined;
     ctx.metadata.toolsChanged = toolsChanged;
 
-    const innerStream = provider.chatStream(ctx, request);
+    const innerStream = provider.chatStream(ctx, request, signal);
 
     async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
       let saved = false;
       let lastMsgSaved = false;
       try {
         for await (const chunk of innerStream) {
+          if (signal?.aborted) return;
           if (!saved) {
             saved = true;
             if (toolsChanged) {
@@ -976,7 +996,7 @@ async function handleDbRestoreStreamWithHash(
   }
 
   const diffRequest: InternalRequest = { ...request, messages: diff.messagesToSend };
-  const innerStream = provider.chatStream(ctx, diffRequest);
+  const innerStream = provider.chatStream(ctx, diffRequest, signal);
   const finalToolsHash = newToolsHash;
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
@@ -984,6 +1004,7 @@ async function handleDbRestoreStreamWithHash(
     let lastMsgSaved = false;
     try {
       for await (const chunk of innerStream) {
+        if (signal?.aborted) return;
         if (!saved) {
           saved = true;
           addRequestToHashCache(hashCache, request.messages, ctx.metadata);

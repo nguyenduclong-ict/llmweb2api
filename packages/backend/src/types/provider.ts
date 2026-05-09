@@ -13,7 +13,7 @@ export interface Provider {
   login(settings: Record<string, unknown>): Promise<SessionContext>;
   createSession(ctx: SessionContext): Promise<SessionContext>;
   chat(ctx: SessionContext, request: InternalRequest): Promise<InternalResponse>;
-  chatStream(ctx: SessionContext, request: InternalRequest): AsyncGenerator<InternalStreamChunk>;
+  chatStream(ctx: SessionContext, request: InternalRequest, signal?: AbortSignal): AsyncGenerator<InternalStreamChunk>;
   dispose(ctx: SessionContext): Promise<void>;
   refreshToken?(ctx: SessionContext): Promise<SessionContext>;
 }
