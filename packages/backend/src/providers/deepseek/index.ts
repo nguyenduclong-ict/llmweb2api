@@ -771,7 +771,7 @@ class DeepSeekProvider implements Provider {
     const messageXml = messages
       .filter((m) => isNewConversation || m.role !== 'assistant')
       .map((m) => renderMessageBlock(m as InternalMessage))
-      .join('\n');
+      .join('\n\n');
 
     const t0 = Date.now();
     let prompt: string;
@@ -793,7 +793,8 @@ class DeepSeekProvider implements Provider {
         // message cuối cùng nằm trong prompt inline (tránh duplicate).
         const lastMsg = messages[messages.length - 1];
         const historyMsgs = messages.slice(0, -1);
-        fileContent = historyMsgs.map((m) => renderMessageBlock(m as InternalMessage)).join('\n') || '(empty history)';
+        fileContent =
+          historyMsgs.map((m) => renderMessageBlock(m as InternalMessage)).join('\n\n') || '(empty history)';
         inlineXml = renderMessageBlock(lastMsg as InternalMessage);
       } else {
         // Có cache: API đã có history stateful. Không cần gửi lại context cũ.
@@ -860,7 +861,7 @@ function countImageBlocks(msg: InternalMessage): number {
 }
 
 function buildVisionPrompt(request: InternalRequest): string {
-  const messages = request.messages.map((msg) => renderMessageBlock(msg)).join('\n');
+  const messages = request.messages.map((msg) => renderMessageBlock(msg)).join('\n\n');
   return [block('system', VISION_SYSTEM_PROMPT), messages].join('\n\n');
 }
 
@@ -996,7 +997,7 @@ function buildEditMessagePrompt(request: InternalRequest): string {
         const toolCallId = m.tool_call_id || 'unknown';
         return toolBlock(toolCallId, messageContent(m as any));
       })
-      .join('\n');
+      .join('\n\n');
 
     return toolBlocks;
   }

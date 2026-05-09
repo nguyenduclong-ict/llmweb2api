@@ -35,7 +35,10 @@ export function createApiKey(name: string, apiKey?: string, cache?: boolean): Ap
   return row!;
 }
 
-export function updateApiKey(id: number, data: Partial<Pick<ApiKeyRecord, 'name' | 'cache' | 'enabled'>>): void {
+export function updateApiKey(
+  id: number,
+  data: Partial<Pick<ApiKeyRecord, 'name'> & { cache: boolean | number; enabled: boolean | number }>,
+): void {
   const fields: string[] = [];
   const values: unknown[] = [];
   if (data.name !== undefined) {
@@ -44,11 +47,11 @@ export function updateApiKey(id: number, data: Partial<Pick<ApiKeyRecord, 'name'
   }
   if (data.cache !== undefined) {
     fields.push('cache = ?');
-    values.push(data.cache);
+    values.push(data.cache ? 1 : 0);
   }
   if (data.enabled !== undefined) {
     fields.push('enabled = ?');
-    values.push(data.enabled);
+    values.push(data.enabled ? 1 : 0);
   }
   if (fields.length === 0) return;
   fields.push("updated_at = datetime('now')");

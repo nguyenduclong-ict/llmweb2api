@@ -4,11 +4,11 @@ import path from 'path';
 import { authMiddleware } from '../middleware/auth';
 import { loggerMiddleware } from '../middleware/logger';
 import { rateLimitMiddleware } from '../middleware/rateLimit';
-import { openaiAdapter } from '../../adapters/openai';
+import { openaiAdapter, openaiResponsesAdapter } from '../../adapters/openai';
 import { anthropicAdapter } from '../../adapters/anthropic';
 import { geminiAdapter } from '../../adapters/gemini';
 import { processChat, processChatStream } from '../../providers/core/manager';
-import type { InternalRequest } from '../../types/common';
+import type { InternalRequest, ToolCall } from '../../types/common';
 
 export const apiRoutes: Router = Router();
 
@@ -160,6 +160,110 @@ apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Re
 
     (req as any).accountId = accountId;
     res.json(openaiAdapter.formatResponse(response));
+  } catch (err: any) {
+    console.error(
+      `[API_ERROR] ${req.method} ${req.originalUrl}:`,
+      err?.message || String(err),
+      err?.stack?.slice(0, 200) || '',
+    );
+    res.status(500).json({ error: err?.message || 'Internal error' });
+  }
+});
+
+apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response) => {
+  try {
+    const internalReq = openaiResponsesAdapter.parseRequest(req.body);
+    dumpRawChatRequest(req, internalReq);
+    const useCache: boolean = !!(req as any).apiKeyCache;
+
+    if (req.body.stream) {
+      const controller = new AbortController();
+      res.on('close', () => {
+        controller.abort();
+        console.log('[SSE] Client disconnected, aborting responses stream');
+      });
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      try {
+        const { stream, accountId, conversationId } = await processChatStream(
+          'deepseek',
+          internalReq,
+          useCache,
+          controller.signal,
+        );
+
+        (req as any).accountId = accountId;
+
+        const responseId = `resp_${Date.now()}`;
+        let firstChunk = true;
+        let outputText = '';
+        let lastChunk;
+        const streamedToolCalls = new Map<number, ToolCall>();
+        safeWrite(res, openaiResponsesAdapter.formatStreamStart(responseId, internalReq.model));
+
+        for await (const chunk of stream) {
+          if (firstChunk && conversationId) {
+            chunk.conversationId = conversationId;
+          }
+          firstChunk = false;
+          lastChunk = chunk;
+          if (chunk.content) outputText += chunk.content;
+          if (chunk.toolCalls) {
+            chunk.toolCalls.forEach((toolCall, index) => streamedToolCalls.set(index, toolCall));
+          }
+          if (chunk.toolCallDelta) {
+            const index = chunk.toolCallDelta.index;
+            const existing =
+              streamedToolCalls.get(index) ??
+              ({
+                id: chunk.toolCallDelta.id ?? `call_${index + 1}`,
+                type: 'function',
+                function: { name: '', arguments: '' },
+              } satisfies ToolCall);
+
+            if (chunk.toolCallDelta.id) existing.id = chunk.toolCallDelta.id;
+            if (chunk.toolCallDelta.function?.name) existing.function.name += chunk.toolCallDelta.function.name;
+            if (chunk.toolCallDelta.function?.arguments) {
+              existing.function.arguments += chunk.toolCallDelta.function.arguments;
+            }
+            streamedToolCalls.set(index, existing);
+          }
+
+          const sseData = openaiResponsesAdapter.formatStreamChunk(chunk, responseId);
+          if (sseData && !safeWrite(res, sseData)) break;
+        }
+
+        safeWrite(
+          res,
+          openaiResponsesAdapter.formatStreamDone(
+            responseId,
+            internalReq.model,
+            outputText,
+            lastChunk,
+            [...streamedToolCalls.entries()].sort(([a], [b]) => a - b).map(([, toolCall]) => toolCall),
+          ),
+        );
+      } catch (err: any) {
+        if (err?.message !== 'canceled') {
+          console.error(`[API_ERROR] ${req.method} ${req.originalUrl}:`, err.message || String(err));
+        }
+        if (!res.headersSent) {
+          res.status(500).json({ error: err.message || 'Internal error' });
+          return;
+        }
+      }
+
+      res.end();
+      return;
+    }
+
+    const { response, accountId } = await processChat('deepseek', internalReq, useCache);
+
+    (req as any).accountId = accountId;
+    res.json(openaiResponsesAdapter.formatResponse(response));
   } catch (err: any) {
     console.error(
       `[API_ERROR] ${req.method} ${req.originalUrl}:`,

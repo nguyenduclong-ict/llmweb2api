@@ -7,7 +7,8 @@ import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { Save, Download, Plus, Trash2, RotateCcw } from 'lucide-react';
+import { Textarea } from '../components/ui/textarea';
+import { Save, Download, Plus, Trash2, RotateCcw, Copy, Check, Terminal } from 'lucide-react';
 
 interface AppSettings {
   dashboardPassword: string;
@@ -25,13 +26,45 @@ interface ModelMapsData {
   defaults: Record<string, Record<string, string>>;
 }
 
+interface ApiKey {
+  id: number;
+  key: string;
+  name: string;
+  cache: number;
+  enabled: number;
+  created_at: string;
+}
+
+type CliTool = 'codex' | 'opencode';
+
 const ADAPTERS = [{ key: 'openai', label: 'OpenAI' }] as const;
+
+const CLI_TOOLS: Array<{ key: CliTool; label: string }> = [
+  { key: 'codex', label: 'Codex' },
+  { key: 'opencode', label: 'OpenCode' },
+];
+
+const DEFAULT_PROVIDER_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-reasoner'];
+
+function getCliApiBaseUrl(): string {
+  return `${window.location.origin}/v1`;
+}
+
+function getCliEndpointUrl(tool: CliTool): string {
+  const baseUrl = getCliApiBaseUrl();
+  return tool === 'codex' ? `${baseUrl}/responses` : baseUrl;
+}
 
 export default function Settings() {
   const [password, setPassword] = useState('');
   const [retentionDays, setRetentionDays] = useState('30');
   const [conversationRetention, setConversationRetention] = useState('');
   const [saved, setSaved] = useState(false);
+  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [selectedCli, setSelectedCli] = useState<CliTool>('codex');
+  const [selectedApiKeyId, setSelectedApiKeyId] = useState('');
+  const [copiedCliSnippet, setCopiedCliSnippet] = useState(false);
+  const [copiedRevertCommand, setCopiedRevertCommand] = useState(false);
 
   const [modelMaps, setModelMaps] = useState<ModelMapsData>({
     openai: {},
@@ -53,6 +86,14 @@ export default function Settings() {
     apiGet<ModelMapsData>('/api/settings/model-maps')
       .then((data) => {
         setModelMaps(data);
+      })
+      .catch(console.error);
+
+    apiGet<ApiKey[]>('/api/api-keys')
+      .then((data) => {
+        setApiKeys(data);
+        const firstEnabled = data.find((key) => key.enabled) || data[0];
+        if (firstEnabled) setSelectedApiKeyId(String(firstEnabled.id));
       })
       .catch(console.error);
   }, []);
@@ -122,6 +163,238 @@ export default function Settings() {
     a.download = 'llmweb2api-config.json';
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function buildCliSnippet(): string {
+    return buildNodeCommand(buildCliSetupScript());
+  }
+
+  function buildCliSetupScript(): string {
+    const selectedKey = apiKeys.find((key) => String(key.id) === selectedApiKeyId);
+    const apiKey = selectedKey?.key || '<select-api-key>';
+    const baseUrl = getCliApiBaseUrl();
+    const providerModels = modelMaps.availableProviderModels.length
+      ? modelMaps.availableProviderModels
+      : DEFAULT_PROVIDER_MODELS;
+    const revertCommand = buildRevertCommand();
+    return `const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const tool = ${JSON.stringify(selectedCli)};
+const apiKey = ${JSON.stringify(apiKey)};
+const baseUrl = ${JSON.stringify(baseUrl)};
+const providerModels = ${JSON.stringify(providerModels, null, 2)};
+const revertCommand = ${JSON.stringify(revertCommand)};
+const defaultModel = providerModels[0] || 'deepseek-v4-flash';
+const endpointUrl = tool === 'codex' ? baseUrl + '/responses' : baseUrl;
+
+function getOpenCodeConfigRoot() {
+  if (process.platform === 'win32') {
+    return process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  }
+  return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+}
+
+function getTargetFiles() {
+  if (tool === 'codex') {
+    const root = path.join(os.homedir(), '.codex');
+    return [
+      { file: path.join(root, 'config.toml'), content: buildCodexConfig() },
+      { file: path.join(root, 'auth.json'), content: buildCodexAuth() },
+    ];
+  }
+  return [{ file: path.join(getOpenCodeConfigRoot(), 'opencode', 'opencode.json'), content: buildOpenCodeConfig() }];
+}
+
+function buildCodexConfig() {
+  return [
+    'model = ' + JSON.stringify(defaultModel),
+    'model_provider = "llmweb2api"',
+    'cli_auth_credentials_store = "file"',
+    '',
+    '[model_providers.llmweb2api]',
+    'name = "llmweb2api"',
+    'base_url = ' + JSON.stringify(baseUrl),
+    'wire_api = "responses"',
+    'requires_openai_auth = true',
+    '',
+  ].join('\\n');
+}
+
+function buildCodexAuth() {
+  return JSON.stringify({ OPENAI_API_KEY: apiKey, auth_mode: 'apikey' }, null, 2) + '\\n';
+}
+
+function buildOpenCodeConfig() {
+  const models = Object.fromEntries(
+    providerModels.map((model) => [
+      model,
+      {
+        name: model,
+        modalities: {
+          input: ['text', 'image'],
+          output: ['text'],
+        },
+        limit: {
+          output: 32000,
+          context: 480000,
+        },
+        options: {
+          thinking: {
+            type: 'enabled',
+          },
+        },
+        compaction: {
+          threshold: 0.8,
+        },
+      },
+    ]),
+  );
+  return JSON.stringify(
+    {
+      $schema: 'https://opencode.ai/config.json',
+      provider: {
+        llmweb2api: {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'llmweb2api',
+          options: {
+            baseURL: baseUrl,
+            apiKey,
+          },
+          models,
+        },
+      },
+    },
+    null,
+    2,
+  ) + '\\n';
+}
+
+function writeWithBackup(file, content) {
+  const backupFile = file + '.llmweb2api.bak';
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (fs.existsSync(file) && !fs.existsSync(backupFile)) {
+    fs.copyFileSync(file, backupFile);
+    console.log('Backed up existing config to ' + backupFile);
+  }
+  fs.writeFileSync(file, content, 'utf8');
+  console.log('Wrote ' + file);
+}
+
+for (const item of getTargetFiles()) {
+  writeWithBackup(item.file, item.content);
+}
+console.log('Configured ' + tool + ' for API base URL: ' + baseUrl);
+console.log('Requests will use endpoint: ' + endpointUrl);
+console.log('Revert: ' + revertCommand);`;
+  }
+
+  function buildRevertCommand(): string {
+    const script =
+      selectedCli === 'codex'
+        ? "const fs=require('fs'),os=require('os'),path=require('path');for(const file of [path.join(os.homedir(),'.codex','config.toml'),path.join(os.homedir(),'.codex','auth.json')]){const bak=file+'.llmweb2api.bak';if(fs.existsSync(bak)){fs.copyFileSync(bak,file);fs.rmSync(bak);console.log('Restored '+file)}else if(fs.existsSync(file)){fs.rmSync(file);console.log('Removed '+file)}else{console.log('Nothing to revert for '+file)}}"
+        : "const fs=require('fs'),os=require('os'),path=require('path');const root=process.platform==='win32'?(process.env.APPDATA||path.join(os.homedir(),'AppData','Roaming')):(process.env.XDG_CONFIG_HOME||path.join(os.homedir(),'.config'));const file=path.join(root,'opencode','opencode.json');const bak=file+'.llmweb2api.bak';if(fs.existsSync(bak)){fs.copyFileSync(bak,file);fs.rmSync(bak);console.log('Restored '+file)}else if(fs.existsSync(file)){fs.rmSync(file);console.log('Removed '+file)}else{console.log('Nothing to revert')}";
+    return buildNodeCommand(script);
+  }
+
+  function buildNodeCommand(script: string): string {
+    return `node -e "eval(Buffer.from('${btoa(script)}','base64').toString('utf8'))"`;
+  }
+
+  function buildCliConfigTargetLabel(): string {
+    if (selectedCli === 'codex') return '~/.codex/config.toml and ~/.codex/auth.json';
+    return 'Windows: %APPDATA%\\opencode\\opencode.json, macOS/Linux: ~/.config/opencode/opencode.json';
+  }
+
+  function buildManualCliConfig(): string {
+    const selectedKey = apiKeys.find((key) => String(key.id) === selectedApiKeyId);
+    const apiKey = selectedKey?.key || '<select-api-key>';
+    const baseUrl = getCliApiBaseUrl();
+    const providerModels = modelMaps.availableProviderModels.length
+      ? modelMaps.availableProviderModels
+      : DEFAULT_PROVIDER_MODELS;
+    const defaultModel = providerModels[0] || 'deepseek-v4-flash';
+
+    if (selectedCli === 'codex') {
+      return [
+        'File: ~/.codex/config.toml',
+        '',
+        `model = ${JSON.stringify(defaultModel)}`,
+        'model_provider = "llmweb2api"',
+        'cli_auth_credentials_store = "file"',
+        '',
+        '# Codex calls POST ' + baseUrl + '/responses because wire_api is responses.',
+        '[model_providers.llmweb2api]',
+        'name = "llmweb2api"',
+        `base_url = ${JSON.stringify(baseUrl)}`,
+        'wire_api = "responses"',
+        'requires_openai_auth = true',
+        '',
+        'File: ~/.codex/auth.json',
+        '',
+        JSON.stringify({ OPENAI_API_KEY: apiKey, auth_mode: 'apikey' }, null, 2),
+      ].join('\n');
+    }
+
+    const models = Object.fromEntries(
+      providerModels.map((model) => [
+        model,
+        {
+          name: model,
+          modalities: {
+            input: ['text', 'image'],
+            output: ['text'],
+          },
+          limit: {
+            output: 32000,
+            context: 480000,
+          },
+          options: {
+            thinking: {
+              type: 'enabled',
+            },
+          },
+          compaction: {
+            threshold: 0.8,
+          },
+        },
+      ]),
+    );
+
+    return [
+      `File: ${buildCliConfigTargetLabel()}`,
+      '',
+      JSON.stringify(
+        {
+          $schema: 'https://opencode.ai/config.json',
+          provider: {
+            llmweb2api: {
+              npm: '@ai-sdk/openai-compatible',
+              name: 'llmweb2api',
+              options: {
+                baseURL: baseUrl,
+                apiKey,
+              },
+              models,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    ].join('\n');
+  }
+
+  async function copyCliSnippet() {
+    await navigator.clipboard.writeText(buildCliSnippet());
+    setCopiedCliSnippet(true);
+    setTimeout(() => setCopiedCliSnippet(false), 2000);
+  }
+
+  async function copyRevertCommand() {
+    await navigator.clipboard.writeText(buildRevertCommand());
+    setCopiedRevertCommand(true);
+    setTimeout(() => setCopiedRevertCommand(false), 2000);
   }
 
   return (
@@ -311,6 +584,92 @@ export default function Settings() {
                 </TabsContent>
               ))}
             </Tabs>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>CLI Configuration</CardTitle>
+            <CardDescription>
+              Generate a shell command that writes native OpenAI-compatible CLI config files
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="cli-tool">CLI Tool</Label>
+                <Select value={selectedCli} onValueChange={(value) => setSelectedCli(value as CliTool)}>
+                  <SelectTrigger id="cli-tool">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CLI_TOOLS.map((tool) => (
+                      <SelectItem key={tool.key} value={tool.key}>
+                        {tool.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="cli-api-key">API Key</Label>
+                <Select value={selectedApiKeyId} onValueChange={setSelectedApiKeyId}>
+                  <SelectTrigger id="cli-api-key">
+                    <SelectValue placeholder="Select an API key" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {apiKeys.map((key) => (
+                      <SelectItem key={key.id} value={String(key.id)}>
+                        {key.name} {key.enabled ? '' : '(disabled)'}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <Terminal className="h-4 w-4" />
+              <span>
+                Generated config writes <code>{buildCliConfigTargetLabel()}</code> and points it at{' '}
+                <code>{getCliEndpointUrl(selectedCli)}</code>.
+              </span>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="cli-snippet">CMD / Bash command</Label>
+              <Textarea
+                id="cli-snippet"
+                className="min-h-[120px] font-mono text-xs"
+                readOnly
+                value={buildCliSnippet()}
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="cli-manual-config">Manual setup</Label>
+              <Textarea
+                id="cli-manual-config"
+                className="min-h-[220px] font-mono text-xs"
+                readOnly
+                value={buildManualCliConfig()}
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="cli-revert-command">Revert command</Label>
+              <div className="flex gap-2">
+                <Input id="cli-revert-command" readOnly value={buildRevertCommand()} className="font-mono text-xs" />
+                <Button variant="outline" size="icon" onClick={copyRevertCommand}>
+                  {copiedRevertCommand ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+
+            <Button variant="outline" onClick={copyCliSnippet} disabled={!selectedApiKeyId}>
+              {copiedCliSnippet ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+              Copy Snippet
+            </Button>
           </CardContent>
         </Card>
 

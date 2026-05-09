@@ -165,6 +165,7 @@ npx tsx src/index.ts
 | Endpoint                    | Định dạng |
 | --------------------------- | --------- |
 | `POST /v1/chat/completions` | OpenAI    |
+| `POST /v1/responses`        | OpenAI    |
 
 ### Quản lý
 

@@ -21,6 +21,7 @@ async function main(): Promise<void> {
   app.listen(PORT, HOST, () => {
     console.log(`[SERVER] llmweb2api running on http://${HOST}:${PORT}`);
     console.log(`[SERVER] OpenAI endpoint:    POST /v1/chat/completions`);
+    console.log(`[SERVER] OpenAI endpoint:    POST /v1/responses`);
     console.log(`[SERVER] Anthropic endpoint: POST /v1/messages`);
     console.log(`[SERVER] Gemini endpoint:    POST /v1/models/:model`);
     console.log(`[SERVER] Health check:       GET  /health`);
