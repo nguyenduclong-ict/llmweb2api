@@ -139,7 +139,7 @@ class DeepSeekProvider implements Provider {
       reasoningContent: reasoning || undefined,
       finishReason,
       toolCalls: toolCalls?.map((tc) => ({
-        id: `call_${Date.now()}_${tc.name}`,
+        id: tc.id || `call_${Date.now()}_${tc.name}`,
         type: 'function' as const,
         function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
       })),
@@ -149,6 +149,13 @@ class DeepSeekProvider implements Provider {
 
   async *chatStream(ctx: SessionContext, request: InternalRequest, signal?: AbortSignal): AsyncGenerator<InternalStreamChunk> {
     const editMessageId = ctx.metadata.editMessageId as number | undefined;
+
+    const parentMsgId = ctx.metadata.parentMessageId;
+    console.log(
+      `[DEEPSEEK] chatStream: editMsgId=${editMessageId ?? '<none>'} ` +
+      `parentMsgId=${parentMsgId ?? '<none>'} ` +
+      `msgs=${request.messages.length} roles=[${request.messages.map((m) => m.role).join(',')}]`,
+    );
 
     // Regeneration via edit_message
     if (editMessageId) {
@@ -300,6 +307,10 @@ class DeepSeekProvider implements Provider {
     if (signal?.aborted) return;
     const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/completion');
     const parentMessageId = ctx.metadata.parentMessageId ? Number(ctx.metadata.parentMessageId) : null;
+    console.log(
+      `[DEEPSEEK] completion payload: sessionId=${ctx.sessionId.slice(0, 12)} ` +
+      `parentMsgId=${parentMessageId} promptLen=${prompt.length}`,
+    );
     const payload: DeepSeekCompletionPayload = {
       chat_session_id: ctx.sessionId,
       parent_message_id: parentMessageId,
@@ -514,7 +525,9 @@ class DeepSeekProvider implements Provider {
       .map((m) => {
         const text = messageContent(m as any);
         if (m.role === 'tool') {
-          return block('tool', text);
+          const toolCallId = (m as any).tool_call_id;
+          const body = toolCallId ? `tool_call_id: ${toolCallId}\n${text}` : text;
+          return block('tool', body);
         }
         return block('user', text);
       })
@@ -543,11 +556,22 @@ class DeepSeekProvider implements Provider {
         fileContent = historyMsgs
           .map((m) => {
             const text = messageContent(m as any);
-            return m.role === 'tool' ? block('tool', text) : block('user', text);
+            if (m.role === 'tool') {
+              const toolCallId = (m as any).tool_call_id;
+              const body = toolCallId ? `tool_call_id: ${toolCallId}\n${text}` : text;
+              return block('tool', body);
+            }
+            return block('user', text);
           })
           .join('\n\n') || '(empty history)';
         const lastText = messageContent(lastMsg as any);
-        inlineXml = block(lastMsg.role === 'tool' ? 'tool' : 'user', lastText);
+        if (lastMsg.role === 'tool') {
+          const toolCallId = (lastMsg as any).tool_call_id;
+          const body = toolCallId ? `tool_call_id: ${toolCallId}\n${lastText}` : lastText;
+          inlineXml = block('tool', body);
+        } else {
+          inlineXml = block('user', lastText);
+        }
       } else {
         // Có cache: API đã có history stateful. Không cần gửi lại context cũ.
         // Tất cả message trong request đều là message mới → nằm trong prompt inline.
@@ -773,7 +797,7 @@ function buildToolCallDeltas(toolCalls: ParsedToolCall[], streamId: string): Too
   const deltas: ToolCallDelta[] = [];
   for (let i = 0; i < toolCalls.length; i++) {
     const tc = toolCalls[i];
-    const callId = `call_${streamId}_${i}_${tc.name}`;
+    const callId = tc.id || `call_${streamId}_${i}_${tc.name}`;
 
     // First delta: index, id, type, function.name
     deltas.push({

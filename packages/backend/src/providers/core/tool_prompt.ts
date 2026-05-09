@@ -18,6 +18,7 @@ Nội dung của [#llmweb2api:tool_call] là YAML thuần túy (KHÔNG bọc tro
 
 Cấu trúc cơ bản:
 
+id: call_1_tên_công_cụ  (ID duy nhất, format: call_<số_thứ_tự>_<tên_công_cụ>, VD: call_1_read, call_2_write)
 name: tên_công_cụ
 arguments:
   key1: value1
@@ -56,6 +57,7 @@ LUẬT SỐ 2 — Indentation (2 spaces)
 Mọi indentation PHẢI chính xác 2 spaces. Không dùng tab. Không dùng 4 spaces.
 
 ĐÚNG:
+id: call_1_read
 name: read
 arguments:
   filePath: C:\\test.ts
@@ -64,6 +66,7 @@ arguments:
     Nội dung dòng 2
 
 SAI (4 spaces):
+id: call_1_read
 name: read
 arguments:
     filePath: C:\\test.ts    ← 4 spaces, LỖI PARSE
@@ -139,6 +142,7 @@ Nội dung tool_call là YAML thuần túy. KHÔNG bọc trong \`\`\`yaml hay \`
 ĐÚNG:
 [#llmweb2api:tool_call]
 
+id: call_1_read
 name: read
 arguments:
   filePath: "C:\\test.ts"
@@ -160,19 +164,35 @@ Tên trong name: phải khớp CHÍNH XÁC với tên function trong [#llmweb2ap
 bao gồm cả chữ hoa/thường và dấu gạch dưới.
 
 ───────────────────────────────────────
+LUẬT SỐ 9 — ID tool call (QUAN TRỌNG)
+───────────────────────────────────────
+
+MỖI tool call PHẢI có trường id với format: call_<số_thứ_tự>_<tên_công_cụ>
+
+- Số thứ tự bắt đầu từ 1, tăng dần cho mỗi tool call trong cùng 1 response.
+- Tên công cụ phải khớp chính xác với name: bên dưới.
+- Ví dụ: call_1_read, call_2_write, call_3_search
+
+Nếu có 3 tool calls trong 1 response:
+  Tool call thứ 1: id: call_1_<name1>
+  Tool call thứ 2: id: call_2_<name2>
+  Tool call thứ 3: id: call_3_<name3>
+
+───────────────────────────────────────
 CHECKLIST TRƯỚC KHI GỬI TOOL_CALL
 ───────────────────────────────────────
 
 Trước khi đóng [$llmweb2api:tool_call], kiểm tra:
-1. value nào có newline hoặc dài > 80 chars → đã dùng | chưa?
-2. indentation có đúng 2 spaces không?
-3. Windows path đã bọc trong "" chưa?
-4. numbers/booleans có bị bọc trong "" không?
-5. có vô tình bọc nội dung trong \`\`\` không?
-6. sau dấu | đã xuống dòng chưa?
-7. nội dung sau | đã thụt lề đúng chưa?
-8. có đủ [$llmweb2api:tool_call] đóng block chưa?
-9. tên function trong name: có khớp chính xác không?
+1. đã có id với format call_<số>_<tên> chưa?
+2. value nào có newline hoặc dài > 80 chars → đã dùng | chưa?
+3. indentation có đúng 2 spaces không?
+4. Windows path đã bọc trong "" chưa?
+5. numbers/booleans có bị bọc trong "" không?
+6. có vô tình bọc nội dung trong \`\`\` không?
+7. sau dấu | đã xuống dòng chưa?
+8. nội dung sau | đã thụt lề đúng chưa?
+9. có đủ [$llmweb2api:tool_call] đóng block chưa?
+10. tên function trong name: có khớp chính xác không?
 `;
 
 export const TOOL_SYSTEM_PROMPT = `Bạn sẽ làm việc với tôi thông qua một dạng dữ liệu gọi là "llmweb2api xml".
@@ -186,6 +206,7 @@ syntax:
 
 [#llmweb2api:tool_call]
 
+id: call_1_my_tool
 name: my_tool
 arguments:
   key: value
@@ -219,9 +240,9 @@ Các loại khối và chi tiết của chúng:
   // có thể có nhiều công cụ khác nhau
 ]
 
-5. [#llmweb2api:tool_call] ... [$llmweb2api:tool_call]: Khối này chứa các cuộc gọi công cụ (tool calls) mà bạn thực hiện. Nội dung của khối này là 1 đối tượng YAML với cấu trúc name + arguments. Xem YAML_SYNTAX ở cuối prompt này để biết chi tiết cách viết YAML đúng cú pháp.
+5. [#llmweb2api:tool_call] ... [$llmweb2api:tool_call]: Khối này chứa các cuộc gọi công cụ (tool calls) mà bạn thực hiện. Nội dung của khối này là 1 đối tượng YAML với cấu trúc id + name + arguments. Xem YAML_SYNTAX ở cuối prompt này để biết chi tiết cách viết YAML đúng cú pháp.
 
-6. [#llmweb2api:tool] ... [$llmweb2api:tool]: Khối này chứa kết quả thực thi của công cụ (tool results). Đây là khối do hệ thống tự động tạo ra để thông báo kết quả cho bạn. Bạn không cần và không được tự tạo khối này. Nội dung bên trong là kết quả trả về từ công cụ mà bạn đã gọi.
+6. [#llmweb2api:tool] ... [$llmweb2api:tool]: Khối này chứa kết quả thực thi của công cụ (tool results). Đây là khối do hệ thống tự động tạo ra để thông báo kết quả cho bạn. Bạn không cần và không được tự tạo khối này. Dòng đầu tiên trong khối là tool_call_id cho biết kết quả này tương ứng với tool call nào. Nội dung còn lại là kết quả trả về từ công cụ mà bạn đã gọi.
 
 
 QUAN TRỌNG:
@@ -237,7 +258,7 @@ QUAN TRỌNG:
   - [#llmweb2api:tools]
 
 - Tuyệt đối không được tự tạo các khối không được liệt kê ở trên
-- Các khối không hợp lệ, ví dụ: 
+- Các khối không hợp lệ, ví dụ:
   - [$llmweb2api:todowrite]
 
 ==========================

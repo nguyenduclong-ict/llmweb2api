@@ -1,6 +1,7 @@
 import { parse as yamlParse } from 'yaml';
 
 export interface ParsedToolCall {
+  id?: string;
   name: string;
   arguments: Record<string, unknown>;
 }
@@ -153,12 +154,14 @@ function parseCodeToToolCall(body: string, debugCtx?: string): ParsedToolCall | 
   const obj = parseCodeToJson(body, debugCtx);
   if (!obj) return null;
 
-  // Standard: {name, arguments}
+  // Standard: {id, name, arguments}
   if (obj.name && typeof obj.name === 'string') {
-    return {
+    const result: ParsedToolCall = {
       name: obj.name,
       arguments: (obj.arguments as Record<string, unknown>) || {},
     };
+    if (obj.id && typeof obj.id === 'string') result.id = obj.id;
+    return result;
   }
 
   // Model error: {"tool_name": {...}} — single key = name, value = arguments
@@ -317,12 +320,16 @@ function parseJsonBlocks(body: string): ParsedToolCall[] {
           if (obj) {
             const keys = Object.keys(obj);
             if (keys.length === 1 && typeof obj[keys[0]] === 'object' && obj[keys[0]] !== null) {
-              results.push({ name: keys[0], arguments: obj[keys[0]] as Record<string, unknown> });
+              const result: ParsedToolCall = { name: keys[0], arguments: obj[keys[0]] as Record<string, unknown> };
+              if (obj.id && typeof obj.id === 'string') result.id = obj.id;
+              results.push(result);
             } else if (obj.name && typeof obj.name === 'string') {
-              results.push({
+              const result: ParsedToolCall = {
                 name: obj.name,
                 arguments: (obj.arguments as Record<string, unknown>) || {},
-              });
+              };
+              if (obj.id && typeof obj.id === 'string') result.id = obj.id;
+              results.push(result);
             }
           }
           break;
@@ -335,12 +342,16 @@ function parseJsonBlocks(body: string): ParsedToolCall[] {
       if (obj) {
         const keys = Object.keys(obj);
         if (keys.length === 1 && typeof obj[keys[0]] === 'object' && obj[keys[0]] !== null) {
-          results.push({ name: keys[0], arguments: obj[keys[0]] as Record<string, unknown> });
+          const result: ParsedToolCall = { name: keys[0], arguments: obj[keys[0]] as Record<string, unknown> };
+          if (obj.id && typeof obj.id === 'string') result.id = obj.id;
+          results.push(result);
         } else if (obj.name && typeof obj.name === 'string') {
-          results.push({
+          const result: ParsedToolCall = {
             name: obj.name,
             arguments: (obj.arguments as Record<string, unknown>) || {},
-          });
+          };
+          if (obj.id && typeof obj.id === 'string') result.id = obj.id;
+          results.push(result);
         }
       }
       break;

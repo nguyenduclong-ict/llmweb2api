@@ -736,6 +736,10 @@ async function processCachedChatStream(
   }
 
   // Normal append: send only new messages
+  console.log(
+    `[CONV] NORMAL_APPEND convId=${conversationId} parentMsgId=${diff.parentMessageId} ` +
+    `msgsToSend=${diff.messagesToSend.length} roles=[${diff.messagesToSend.map((m) => m.role).join(',')}]`,
+  );
   const ctx = await buildSessionContext(conv.accountId, conversationId);
   ctx.metadata.parentMessageId = diff.parentMessageId;
   ctx.metadata.conversationId = conversationId;
@@ -1069,6 +1073,11 @@ function computeHashDiff(
   let matchedCount = 0;
   let lastMatchedHash: string | null = null;
 
+  console.log(
+    `[DIFF] computeHashDiff: tracked=${tracked.length} cached=${cachedCount} lastMsgId=${lastMessageId} ` +
+    `roles=[${tracked.map((m) => m.role).join(',')}]`,
+  );
+
   for (let i = 0; i < tracked.length; i++) {
     const h = hashMessage(tracked[i]);
     const entry = hashCache[h];
@@ -1097,6 +1106,10 @@ function computeHashDiff(
       const originalIndex = requestMessages.indexOf(firstNewTracked);
       const messagesToSend = requestMessages.slice(originalIndex >= 0 ? originalIndex : 0);
       const parentMessageId = lastMessageId ?? (lastMatchedHash ? (hashCache[lastMatchedHash]?.parent_message_id ?? null) : null);
+      console.log(
+        `[DIFF] RESULT: APPEND_DUP matched=${matchedCount}/${tracked.length} cached=${cachedCount} ` +
+        `parentMsgId=${parentMessageId} msgsToSend=${messagesToSend.length} roles=[${messagesToSend.map((m: InternalMessage) => m.role).join(',')}]`,
+      );
       return { messagesToSend, parentMessageId, lastMatchedHash, isFullMatch: false, matchedCount };
     }
 
@@ -1105,6 +1118,9 @@ function computeHashDiff(
       `lastMessageId=${lastMessageId}`,
     );
     const parentMessageId = lastMessageId ?? (lastMatchedHash ? (hashCache[lastMatchedHash]?.parent_message_id ?? null) : null);
+    console.log(
+      `[DIFF] RESULT: FULL_MATCH parentMsgId=${parentMessageId} — editing via edit_message`,
+    );
     return { messagesToSend: [], parentMessageId, lastMatchedHash, isFullMatch: true, matchedCount };
   }
 
@@ -1119,6 +1135,12 @@ function computeHashDiff(
   const parentMessageId = isRevert
     ? (lastMatchedHash ? (hashCache[lastMatchedHash]?.parent_message_id ?? null) : null)
     : (lastMessageId ?? (lastMatchedHash ? (hashCache[lastMatchedHash]?.parent_message_id ?? null) : null));
+
+  console.log(
+    `[DIFF] RESULT: matched=${matchedCount}/${tracked.length} cached=${cachedCount} ` +
+    `revert=${isRevert} parentMsgId=${parentMessageId} ` +
+    `msgsToSend=${messagesToSend.length} roles=[${messagesToSend.map((m: InternalMessage) => m.role).join(',')}]`,
+  );
 
   return { messagesToSend, parentMessageId, lastMatchedHash, isFullMatch: false, matchedCount };
 }
