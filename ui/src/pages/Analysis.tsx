@@ -26,7 +26,7 @@ export default function Analysis() {
         <DateRangeSelector value={preset} onChange={handlePresetChange} />
       </div>
 
-      <KPICards />
+      <KPICards startDate={startDate} endDate={endDate} />
 
       <div className='grid gap-6 lg:grid-cols-2'>
         <Card>
