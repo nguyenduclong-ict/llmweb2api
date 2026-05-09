@@ -1,5 +1,6 @@
-﻿// Run: npx tsx tests/parse_tool_calls.test.ts
+// Run: npx tsx tests/parse_tool_calls.test.ts
 import { parseToolCallBlock, parseToolCallXML } from '../providers/core/tool_parser';
+import { getBlockContent } from '../providers/core/tool_prompt';
 
 let passed = 0;
 let failed = 0;
@@ -26,389 +27,286 @@ function assertEq<T>(actual: T, expected: T, msg: string) {
   }
 }
 
-// â”€â”€ Test cases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── New [#l2a:tool_call] marker format tests ───────────────────────────
 
-console.log('\n=== 1. YAML format with ```yaml fence ===');
+console.log('\n=== 1. Basic [#l2a:tool_call] marker format ===');
 const r1 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: test_fn
-arguments:
-  key: value
-\`\`\`
-[$llmweb2api:tool_call]
+[#l2a:tool_call]
+[#l2a:parameter:id]
+call_1_test_fn
+[/l2a:parameter:id]
+[#l2a:parameter:name]
+test_fn
+[/l2a:parameter:name]
+[#l2a:parameter:arguments]
+{"key":"value"}
+[/l2a:parameter:arguments]
+[/l2a:tool_call]
 `);
 assertEq(r1.length, 1, '1 tool call');
 assertEq(r1[0].name, 'test_fn', 'name');
+assertEq(r1[0].id, 'call_1_test_fn', 'id');
 assertEq(r1[0].arguments, { key: 'value' }, 'arguments');
 
-console.log('\n=== 2. YAML multi-line string with | ===');
+console.log('\n=== 2. Multiple [#l2a:tool_call] blocks ===');
 const r2 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: edit
-arguments:
-  filePath: C:\\Users\\ADMIN\\Desktop\\file.tsx
-  oldString: |
-    import { useState } from "react";
-    import { Button } from "../components/ui/button";
-    const x = \${template};
-  newString: |
-    import { useState } from "react";
-    import { apiPost } from "../api/client";
-\`\`\`
-[$llmweb2api:tool_call]
-`);
-assertEq(r2.length, 1, '1 tool call');
-assertEq(r2[0].name, 'edit', 'name');
-const a2 = r2[0].arguments;
-assert(typeof a2.filePath === 'string', 'filePath present');
-assert(typeof a2.oldString === 'string', 'oldString present');
-assert(typeof a2.newString === 'string', 'newString present');
-if (typeof a2.oldString === 'string') {
-  assert(a2.oldString.includes('import { useState }'), 'oldString: has react import');
-  assert(a2.oldString.includes('"react"'), 'oldString: preserves quotes in code');
-  assert(a2.oldString.includes('${template}'), 'oldString: preserves template literal');
-}
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_read[/l2a:parameter:id]
+[#l2a:parameter:name]read[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"filePath":"test.ts"}[/l2a:parameter:arguments]
+[/l2a:tool_call]
 
-console.log('\n=== 3. Multiple YAML blocks ===');
+[#l2a:tool_call]
+[#l2a:parameter:id]call_2_write[/l2a:parameter:id]
+[#l2a:parameter:name]write[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"filePath":"out.ts","content":"hello"}[/l2a:parameter:arguments]
+[/l2a:tool_call]
+`);
+assertEq(r2.length, 2, '2 tool calls');
+assertEq(r2[0].name, 'read', 'first name');
+assertEq(r2[0].id, 'call_1_read', 'first id');
+assertEq(r2[1].name, 'write', 'second name');
+assertEq(r2[1].id, 'call_2_write', 'second id');
+
+console.log('\n=== 3. Marker with complex nested JSON arguments ===');
 const r3 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: fn1
-arguments:
-  a: 1
-\`\`\`
-[$llmweb2api:tool_call]
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: fn2
-arguments:
-  b: 2
-\`\`\`
-[$llmweb2api:tool_call]
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_complex_fn[/l2a:parameter:id]
+[#l2a:parameter:name]complex_fn[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"arr":[1,2,{"nested":"yes"}],"obj":{"deep":{"deeper":[3,4]}}}[/l2a:parameter:arguments]
+[/l2a:tool_call]
 `);
-assertEq(r3.length, 2, '2 tool calls');
-assertEq(r3[0].name, 'fn1', 'first name');
-assertEq(r3[1].name, 'fn2', 'second name');
+assertEq(r3.length, 1, '1 tool call');
+assertEq(r3[0].arguments.arr, [1, 2, { nested: 'yes' }], 'nested array');
+assertEq(r3[0].arguments.obj, { deep: { deeper: [3, 4] } }, 'nested object');
 
-console.log('\n=== 4. JSON format still works (backwards compat) ===');
+console.log('\n=== 4. Tool call without id parameter ===');
 const r4 = parseToolCallXML(`
+[#l2a:tool_call]
+[#l2a:parameter:name]no_id_fn[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"x":1}[/l2a:parameter:arguments]
+[/l2a:tool_call]
+`);
+assertEq(r4.length, 1, '1 tool call without id');
+assertEq(r4[0].name, 'no_id_fn', 'name');
+assertEq(r4[0].id, undefined, 'id is undefined');
+
+console.log('\n=== 5. Without name parameter → no result ===');
+const r5 = parseToolCallXML(`
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_x[/l2a:parameter:id]
+[#l2a:parameter:arguments]{"x":1}[/l2a:parameter:arguments]
+[/l2a:tool_call]
+`);
+assertEq(r5.length, 0, '0 tool calls (name required)');
+
+console.log('\n=== 6. Implicit close: new [#l2a:tool_call] before close ===');
+const r6 = parseToolCallXML(`
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_a[/l2a:parameter:id]
+[#l2a:parameter:name]fn_a[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"a":1}[/l2a:parameter:arguments]
+[#l2a:tool_call]
+[#l2a:parameter:id]call_2_b[/l2a:parameter:id]
+[#l2a:parameter:name]fn_b[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"b":2}[/l2a:parameter:arguments]
+[/l2a:tool_call]
+`);
+assertEq(r6.length, 2, '2 tool calls via implicit close');
+assertEq(r6[0].name, 'fn_a', 'first via implicit close');
+assertEq(r6[1].name, 'fn_b', 'second closes normally');
+
+console.log('\n=== 7. Unclosed tool_call at end of text ===');
+const r7 = parseToolCallXML(`
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_last[/l2a:parameter:id]
+[#l2a:parameter:name]last_fn[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"z":99}[/l2a:parameter:arguments]
+`);
+assertEq(r7.length, 1, '1 tool call from unclosed block');
+assertEq(r7[0].name, 'last_fn', 'name from unclosed block');
+
+console.log('\n=== 8. Empty body ===');
+const r8 = parseToolCallXML('');
+assertEq(r8.length, 0, '0 tool calls for empty');
+
+console.log('\n=== 9. Garbage text → no results ===');
+const r9 = parseToolCallXML('just some random text without any tags');
+assertEq(r9.length, 0, '0 tool calls for garbage');
+
+console.log('\n=== 10. Arguments with Windows paths ===');
+const r10 = parseToolCallXML(`
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_edit[/l2a:parameter:id]
+[#l2a:parameter:name]edit[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"filePath":"C:\\\\Users\\\\ADMIN\\\\Desktop\\\\file.tsx","oldString":"hello","newString":"world"}[/l2a:parameter:arguments]
+[/l2a:tool_call]
+`);
+assertEq(r10.length, 1, '1 tool call');
+assertEq(r10[0].arguments.filePath, 'C:\\Users\\ADMIN\\Desktop\\file.tsx', 'windows path');
+
+console.log('\n=== 11. Invalid JSON in arguments → _raw fallback ===');
+const r11 = parseToolCallXML(`
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_bad[/l2a:parameter:id]
+[#l2a:parameter:name]bad_fn[/l2a:parameter:name]
+[#l2a:parameter:arguments]{not valid json}[/l2a:parameter:arguments]
+[/l2a:tool_call]
+`);
+assertEq(r11.length, 1, '1 tool call despite bad JSON');
+assertEq(r11[0].name, 'bad_fn', 'name parsed');
+assertEq((r11[0].arguments as any)._raw, '{not valid json}', '_raw fallback');
+
+console.log('\n=== 12. Tool call with text before block ===');
+const r12 = parseToolCallXML(`
+Some text before
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_prefix[/l2a:parameter:id]
+[#l2a:parameter:name]prefix_fn[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"x":1}[/l2a:parameter:arguments]
+[/l2a:tool_call]
+`);
+assertEq(r12.length, 1, '1 tool call with text before');
+assertEq(r12[0].name, 'prefix_fn', 'name despite text before');
+
+console.log('\n=== 13. Empty arguments → {} ===');
+const r13 = parseToolCallXML(`
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_empty[/l2a:parameter:id]
+[#l2a:parameter:name]empty_args_fn[/l2a:parameter:name]
+[#l2a:parameter:arguments]{}[/l2a:parameter:arguments]
+[/l2a:tool_call]
+`);
+assertEq(r13.length, 1, '1 tool call with empty args');
+assertEq(r13[0].arguments, {}, 'empty arguments');
+
+// ── Backward compatibility: old [#llmweb2api:tool_call] format ──────
+
+console.log('\n=== 14. Backwards compat: JSON format with fence ===');
+const r14 = parseToolCallXML(`
 [#llmweb2api:tool_call]
 \`\`\`json
 {"name": "json_fn", "arguments": {"key": "value"}}
 \`\`\`
 [$llmweb2api:tool_call]
 `);
-assertEq(r4.length, 1, '1 tool call from JSON');
-assertEq(r4[0].name, 'json_fn', 'name from JSON');
+assertEq(r14.length, 1, '1 tool call from old JSON format');
+assertEq(r14[0].name, 'json_fn', 'name from JSON');
 
-console.log('\n=== 5. Bare JSON without fence (backwards compat) ===');
-const r5 = parseToolCallXML(`
+console.log('\n=== 15. Backwards compat: bare JSON ===');
+const r15 = parseToolCallXML(`
 [#llmweb2api:tool_call]
 {"name": "bare_fn", "arguments": {"x": 1}}
 [$llmweb2api:tool_call]
 `);
-assertEq(r5.length, 1, '1 tool call from bare JSON');
-assertEq(r5[0].name, 'bare_fn', 'name from bare JSON');
+assertEq(r15.length, 1, '1 tool call from bare JSON');
+assertEq(r15[0].name, 'bare_fn', 'name from bare JSON');
 
-console.log('\n=== 6. Old [#llmweb2api:tool_calls] multi-call format ===');
-const r6 = parseToolCallXML(`
-[#llmweb2api:tool_calls]
-{"name": "old1", "arguments": {"x": 1}}
-{"name": "old2", "arguments": {"y": 2}}
-[$llmweb2api:tool_calls]
-`);
-assertEq(r6.length, 2, '2 tool calls from old format');
-assertEq(r6[0].name, 'old1', 'first old name');
-assertEq(r6[1].name, 'old2', 'second old name');
-
-console.log('\n=== 7. Single-key fallback {"tool_name": {...}} ===');
-const r7 = parseToolCallXML(`
+console.log('\n=== 16. Backwards compat: single-key fallback ===');
+const r16 = parseToolCallXML(`
 [#llmweb2api:tool_call]
 {"task": {"description": "Find file logic", "subagent_type": "explore"}}
 [$llmweb2api:tool_call]
 `);
-assertEq(r7.length, 1, '1 tool call via single-key fallback');
-assertEq(r7[0].name, 'task', 'name from single key');
+assertEq(r16.length, 1, '1 tool call via single-key fallback');
+assertEq(r16[0].name, 'task', 'name from single key');
 
-console.log('\n=== 8. YAML without fence (bare) ===');
-const r8 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-name: no_fence_fn
-arguments:
-  key: val
-[$llmweb2api:tool_call]
-`);
-assertEq(r8.length, 1, '1 tool call from bare YAML');
-assertEq(r8[0].name, 'no_fence_fn', 'name from bare YAML');
-
-console.log('\n=== 9. parseToolCallBlock with YAML ===');
-const r9 = parseToolCallBlock(`
-\`\`\`yaml
-name: block_fn
-arguments:
-  x: 1
-\`\`\`
-`);
-assertEq(r9.length, 1, '1 tool call from block YAML');
-assertEq(r9[0].name, 'block_fn', 'name from block');
-
-console.log('\n=== 10. Empty fence â†’ no results ===');
-const r10 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-\`\`\`
-[$llmweb2api:tool_call]
-`);
-assertEq(r10.length, 0, '0 tool calls for empty fence');
-
-console.log('\n=== 11. Invalid YAML in fence â†’ no results ===');
-const r11 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-: invalid yaml :
-\`\`\`
-[$llmweb2api:tool_call]
-`);
-assertEq(r11.length, 0, '0 tool calls for invalid YAML');
-
-console.log('\n=== 12. Garbage text â†’ no results ===');
-const r12 = parseToolCallXML('not yaml at all just some text');
-assertEq(r12.length, 0, '0 tool calls for garbage');
-
-console.log('\n=== 13. Empty body ===');
-const r13 = parseToolCallXML('');
-assertEq(r13.length, 0, '0 tool calls for empty');
-
-console.log('\n=== 14. Windows path in YAML ===');
-const r14 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: edit
-arguments:
-  filePath: C:\\Users\\ADMIN\\Desktop\\Code\\chat2api\\llmweb2api\\ui\\src\\pages\\Login.tsx
-\`\`\`
-[$llmweb2api:tool_call]
-`);
-assertEq(r14.length, 1, '1 tool call');
-assertEq(
-  r14[0].arguments.filePath,
-  'C:\\Users\\ADMIN\\Desktop\\Code\\chat2api\\llmweb2api\\ui\\src\\pages\\Login.tsx',
-  'windows path',
-);
-
-console.log('\n=== 15. YAML with complex nested arguments ===');
-const r15 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: complex_fn
-arguments:
-  arr:
-    - 1
-    - 2
-    - nested: yes
-  obj:
-    deep:
-      deeper:
-        - 3
-        - 4
-\`\`\`
-[$llmweb2api:tool_call]
-`);
-assertEq(r15.length, 1, '1 tool call');
-assertEq(r15[0].arguments.arr, [1, 2, { nested: 'yes' }], 'nested array');
-assertEq(r15[0].arguments.obj, { deep: { deeper: [3, 4] } }, 'nested object');
-
-console.log('\n=== 16. Fence without language tag (bare ```) ===');
-const r16 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`
-name: bare_fence_fn
-arguments:
-  key: val
-\`\`\`
-[$llmweb2api:tool_call]
-`);
-assertEq(r16.length, 1, '1 tool call from bare fence');
-assertEq(r16[0].name, 'bare_fence_fn', 'name from bare fence');
-
-console.log('\n=== 17. JSON inside bare ``` fence ===');
+console.log('\n=== 17. Old format: properly closed JSON blocks ===');
 const r17 = parseToolCallXML(`
 [#llmweb2api:tool_call]
-\`\`\`
-{"name": "json_bare_fence", "arguments": {"x": 1}}
-\`\`\`
+{"name": "fn1", "arguments": {"x": 1}}
+[$llmweb2api:tool_call]
+[#llmweb2api:tool_call]
+{"name": "fn2", "arguments": {"y": 2}}
 [$llmweb2api:tool_call]
 `);
-assertEq(r17.length, 1, '1 tool call from JSON in bare fence');
-assertEq(r17[0].name, 'json_bare_fence', 'name from JSON in bare fence');
+assertEq(r17.length, 2, '2 tool calls properly closed');
+assertEq(r17[0].name, 'fn1', 'first name');
+assertEq(r17[1].name, 'fn2', 'second name');
 
-console.log('\n=== 18. Missing closing marker â†’ implicit close at next block ===');
+console.log('\n=== 18. New [#l2a:tool_call] format takes priority ===');
 const r18 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: fn1
-arguments:
-  x: 1
-\`\`\`
-text outside block
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: fn2
-arguments:
-  y: 2
-\`\`\`
-[$llmweb2api:tool_call]
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_new[/l2a:parameter:id]
+[#l2a:parameter:name]new_format_fn[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"z":999}[/l2a:parameter:arguments]
+[/l2a:tool_call]
 `);
-assertEq(r18.length, 2, '2 tool calls via implicit close');
-assertEq(r18[0].name, 'fn1', 'first via implicit close');
-assertEq(r18[1].name, 'fn2', 'second closes normally');
+assertEq(r18.length, 1, '1 tool call from new format');
+assertEq(r18[0].name, 'new_format_fn', 'new format used');
 
-console.log('\n=== 19. All blocks missing closing markers ===');
-const r19 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: fn_a
-arguments:
-  a: 1
-\`\`\`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: fn_b
-arguments:
-  b: 2
-\`\`\`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: fn_c
-arguments:
-  c: 3
+console.log('\n=== 19. parseToolCallBlock with [#l2a:parameter:] sub-fields ===');
+const r19 = parseToolCallBlock(`
+[#l2a:parameter:id]call_1_block[/l2a:parameter:id]
+[#l2a:parameter:name]block_fn[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"x":1}[/l2a:parameter:arguments]
+`);
+assertEq(r19.length, 1, '1 tool call from block');
+assertEq(r19[0].name, 'block_fn', 'name from block');
+
+console.log('\n=== 20. parseToolCallBlock with old JSON (fallback) ===');
+const r20 = parseToolCallBlock(`
+\`\`\`json
+{"name": "block_json_fn", "arguments": {"x": 1}}
 \`\`\`
 `);
-assertEq(r19.length, 3, '3 tool calls all implicit close');
-assertEq(r19[0].name, 'fn_a', 'first implicit');
-assertEq(r19[1].name, 'fn_b', 'second implicit');
-assertEq(r19[2].name, 'fn_c', 'third implicit (end of text)');
+assertEq(r20.length, 1, '1 tool call from block JSON fallback');
+assertEq(r20[0].name, 'block_json_fn', 'name from block JSON');
 
-console.log('\n=== 20. Real DeepSeek multi-tool-call pattern ===');
-const r20 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-
-name: glob
-arguments:
-  pattern: "**/*.tsx"
-  path: C:\\Users\\Desktop\\Code
-
-[#llmweb2api:tool_call]
-
-name: grep
-arguments:
-  pattern: "adapter"
-  path: C:\\Users\\Desktop\\Code
-`);
-assertEq(r20.length, 2, '2 tools from real pattern');
-assertEq(r20[0].name, 'glob', 'first tool name');
-assertEq(r20[1].name, 'grep', 'second tool name');
-
-console.log('\n=== 21. Block with trailing garbage (model hallucinated text) ===');
+console.log('\n=== 21. Empty [#l2a:tool_call] block → no results ===');
 const r21 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: read_fn
-arguments:
-  filePath: test.ts
-\`\`\`
-some model text that shouldn't be here
-[$llmweb2api:tool_call]
+[#l2a:tool_call]
+[/l2a:tool_call]
 `);
-assertEq(r21.length, 1, '1 tool call despite trailing text in body');
-assertEq(r21[0].name, 'read_fn', 'parsed correctly despite trailing garbage');
+assertEq(r21.length, 0, '0 tool calls for empty tool_call block');
 
-console.log('\n=== 22. YAML with unindented continuation line ===');
-const r22 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-
-name: edit
-arguments:
-  filePath: C:\\Users\\ADMIN\\Desktop\\Code\\test.ts
-  oldString: import { statsRoutes } from './routes/stats';
-  newString: import { statsRoutes } from './routes/stats';
-import { analyticsRoutes } from './routes/analytics';
-
-[$llmweb2api:tool_call]
+console.log('\n=== 22. New separate-lines format (content on own line) ===');
+const r22a = parseToolCallXML(`
+[#l2a:tool_call]
+[#l2a:parameter:id]
+call_1_edit
+[/l2a:parameter:id]
+[#l2a:parameter:name]
+edit
+[/l2a:parameter:name]
+[#l2a:parameter:arguments]
+{"filePath":"C:\\\\test.ts","oldString":"a","newString":"b"}
+[/l2a:parameter:arguments]
+[/l2a:tool_call]
 `);
-assertEq(r22.length, 1, '1 tool call despite unindented continuation');
-assertEq(r22[0].name, 'edit', 'name: edit');
-assertEq(r22[0].arguments.filePath, 'C:\\Users\\ADMIN\\Desktop\\Code\\test.ts', 'filePath preserved');
-const ns = r22[0].arguments.newString as string;
-assert(ns.includes('analyticsRoutes'), 'newString: contains analyticsRoutes');
-assert(ns.includes('statsRoutes'), 'newString: contains statsRoutes');
+assertEq(r22a.length, 1, 'separate-lines: 1 tool call');
+assertEq(r22a[0].name, 'edit', 'separate-lines: name');
+assertEq(r22a[0].id, 'call_1_edit', 'separate-lines: id');
+assertEq(r22a[0].arguments.filePath, 'C:\\test.ts', 'separate-lines: windows path');
+
+console.log('\n=== 23. Real streamed multi-tool-call pattern ===');
+const r23 = parseToolCallXML(`
+[#l2a:tool_call]
+[#l2a:parameter:id]call_1_glob[/l2a:parameter:id]
+[#l2a:parameter:name]glob[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"pattern":"**/*.tsx","path":"C:\\\\Users\\\\Desktop\\\\Code"}[/l2a:parameter:arguments]
+[/l2a:tool_call]
+
+[#l2a:tool_call]
+[#l2a:parameter:id]call_2_grep[/l2a:parameter:id]
+[#l2a:parameter:name]grep[/l2a:parameter:name]
+[#l2a:parameter:arguments]{"pattern":"adapter","path":"C:\\\\Users\\\\Desktop\\\\Code"}[/l2a:parameter:arguments]
+[/l2a:tool_call]
+`);
+assertEq(r23.length, 2, '2 tools from real pattern');
+assertEq(r23[0].name, 'glob', 'first tool name');
+assertEq(r23[1].name, 'grep', 'second tool name');
+
+console.log('\n=== 24. Block content newline unwrapping ===');
+assertEq(getBlockContent('user', '[#l2a:user]hello[/l2a:user]'), 'hello', 'inline block content');
+assertEq(getBlockContent('user', '[#l2a:user]\nhello\n[/l2a:user]'), 'hello', 'single layout newline is removed');
+assertEq(
+  getBlockContent('user', '[#l2a:user]\n\nhello\n[/l2a:user]'),
+  '\nhello',
+  'intentional blank line after opening marker is preserved',
+);
 
 console.log(`\n${'='.repeat(40)}`);
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
 
-  console.log('\n=== 23. Bare YAML with double-quoted Windows path (model output format) ===');
-  const r23 = parseToolCallXML("\n[#llmweb2api:tool_call]\n\nname: read\narguments:\n  filePath: \"C:\\Users\\ADMIN\\Desktop\\Code\\chat2api\\llmweb2api\\ui\\src\\components\\charts\\TokenUsageChart.tsx\"\n\n[$llmweb2api:tool_call]\n");
-  assertEq(r23.length, 1, '1 tool call from double-quoted Windows path');
-  assertEq(r23[0].name, 'read', 'name: read');
-  assertEq(r23[0].arguments.filePath, 'C:\\Users\\ADMIN\\Desktop\\Code\\chat2api\\llmweb2api\\ui\\src\\components\\charts\\TokenUsageChart.tsx', 'double-quoted windows path preserved');
-
-  console.log('\n=== 24. Multiple bare YAML blocks with double-quoted Windows paths ===');
-  const r24 = parseToolCallXML("\n[#llmweb2api:tool_call]\n\nname: read\narguments:\n  filePath: \"C:\\Users\\ADMIN\\Desktop\\Code\\chat2api\\llmweb2api\\ui\\src\\components\\charts\\TokenUsageChart.tsx\"\n\n[#llmweb2api:tool_call]\n\nname: read\narguments:\n  filePath: \"C:\\Users\\ADMIN\\Desktop\\Code\\chat2api\\llmweb2api\\ui\\src\\components\\charts\\RouteTrafficChart.tsx\"\n\n[$llmweb2api:tool_call]\n");
-  assertEq(r24.length, 2, '2 tool calls from multi bare YAML');
-  assertEq(r24[0].name, 'read', 'first name');
-  assertEq(r24[1].name, 'read', 'second name');
-  assert(typeof r24[0].arguments.filePath === 'string', 'first filePath is string');
-  assert(typeof r24[1].arguments.filePath === 'string', 'second filePath is string');
-
-  console.log('\n=== 25. Block markers inside old_string/new_string values (YAML | scalar) ===');
-  const r25 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: edit
-arguments:
-  filePath: test.ts
-  old_string: |
-    [#llmweb2api:system]
-    hello world
-    [$llmweb2api:system]
-  new_string: |
-    [#llmweb2api:system]
-    new hello world
-    [$llmweb2api:system]
-\`\`\`
-[$llmweb2api:tool_call]
-`);
-  assertEq(r25.length, 1, '1 tool call despite markers inside values');
-  assertEq(r25[0].name, 'edit', 'name: edit');
-  const a25 = r25[0].arguments;
-  assert(typeof a25.old_string === 'string', 'old_string is string');
-  assert(typeof a25.new_string === 'string', 'new_string is string');
-  if (typeof a25.old_string === 'string') {
-    assert(a25.old_string.includes('[#llmweb2api:system]'), 'old_string preserves [#llmweb2api:system]');
-    assert(a25.old_string.includes('[$llmweb2api:system]'), 'old_string preserves [$llmweb2api:system]');
-  }
-
-  console.log('\n=== 26. Nested tool_call markers inside values should not disrupt parsing ===');
-  const r26 = parseToolCallXML(`
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: edit
-arguments:
-  old_string: |
-    [#llmweb2api:tool_call]
-    some_code();
-    [$llmweb2api:tool_call]
-  new_string: |
-    [#llmweb2api:tool_call]
-    new_code();
-    [$llmweb2api:tool_call]
-\`\`\`
-[$llmweb2api:tool_call]
-`);
-  assertEq(r26.length, 1, '1 tool call despite nested markers in values');
-  assertEq(r26[0].name, 'edit', 'name: edit despite nested markers');
-
 if (failed > 0) process.exit(1);
-

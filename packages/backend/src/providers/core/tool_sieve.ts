@@ -1,38 +1,46 @@
-import type { ParsedToolCall } from './tool_parser';
-import { parseToolCallBlock } from './tool_parser';
+export type SieveEventType =
+  | 'content'
+  | 'tool_call_start'
+  | 'tool_call_end'
+  | 'tool_call_field_start'
+  | 'tool_call_field_delta'
+  | 'tool_call_field_end';
 
 export interface SieveEvent {
-  type: 'content' | 'tool_calls';
+  type: SieveEventType;
   text?: string;
-  toolCalls?: ParsedToolCall[];
+  field?: string;
 }
 
-const MARKER_PREFIX = '[#llmweb2api:';
+const TC_START = '[#l2a:tool_call]';
+const TC_END = '[/l2a:tool_call]';
+const PARAM_PREFIX = '[#l2a:parameter:';
+const PARAM_END_PREFIX = '[/l2a:parameter:';
+const TAG_PREFIX = '[#l2a:';
+const TAG_END_PREFIX = '[/l2a:';
 
-const START_MARKER = '[#llmweb2api:tool_call]';
-const END_MARKER = '[$llmweb2api:tool_call]';
-
-// Generate partial prefixes for tool_call markers
-const ALL_MARKERS = [START_MARKER, END_MARKER];
-const PARTIALS: string[] = [];
-for (const m of ALL_MARKERS) {
-  for (let i = 1; i < m.length; i++) {
-    PARTIALS.push(m.slice(0, i));
+// All possible partial prefixes of [#l2a:... and [/l2a:...
+function buildPartials(): string[] {
+  const prefixes = [TAG_PREFIX, TAG_END_PREFIX];
+  const partials: string[] = [];
+  for (const p of prefixes) {
+    for (let i = 1; i <= p.length; i++) {
+      partials.push(p.slice(0, i));
+    }
   }
+  // Also include plain [ and [/ for robustness
+  partials.push('[', '[/');
+  return [...new Set(partials)].sort((a, b) => b.length - a.length);
 }
-const UNIQUE_PARTIALS = [...new Set(PARTIALS)].sort((a, b) => b.length - a.length);
 
-// ── ToolSieve ───────────────────────────────────────────────────────
-// Detects [#llmweb2api:tool_call]\n...\n[$llmweb2api:tool_call] blocks.
-// Unknown [#llmweb2api:*] blocks (model hallucination) → stripped,
-// inner content emitted as regular text.
-// Emits one tool_calls event per completed block (supports streaming
-// multiple tool calls incrementally).
+const PARTIALS = buildPartials();
 
 export class ToolSieve {
   private buffer = '';
   private capturing = false;
-  private unknownBlockEnd: string | null = null; // end marker for unknown block
+  private currentField: string | null = null;
+  private unknownBlockRole: string | null = null;
+  private toolCallIndex = 0;
 
   processChunk(text: string): SieveEvent[] {
     const events: SieveEvent[] = [];
@@ -41,11 +49,14 @@ export class ToolSieve {
     this.buffer += text;
 
     while (true) {
-      if (!this.capturing && !this.unknownBlockEnd) {
-        // Look for any [#llmweb2api:* marker
-        const markerIdx = this.buffer.indexOf(MARKER_PREFIX);
-        if (markerIdx < 0) {
-          const partial = this.checkAnyPartial();
+      if (!this.capturing && !this.unknownBlockRole) {
+        // ── Idle: look for [#l2a: at line start ──────────────────
+        const tcIdx = this.findAtLineStart(TC_START);
+        const otherIdx = this.findOtherMarkerAtLineStart();
+
+        const tagIdx = this.closest(tcIdx, otherIdx);
+        if (tagIdx < 0) {
+          const partial = this.checkPartialAtLineEnd();
           if (partial) {
             const content = this.buffer.slice(0, -partial.length);
             this.buffer = partial;
@@ -57,78 +68,154 @@ export class ToolSieve {
           break;
         }
 
-        // Emit text before marker
-        if (markerIdx > 0) {
-          events.push({ type: 'content', text: this.buffer.slice(0, markerIdx) });
+        // Emit text before tag
+        if (tagIdx > 0) {
+          events.push({ type: 'content', text: this.buffer.slice(0, tagIdx) });
         }
 
-        // Extract block name
-        const afterPrefix = this.buffer.slice(markerIdx + MARKER_PREFIX.length);
-        const nameEnd = afterPrefix.indexOf(']');
-        if (nameEnd < 0) {
-          // Partial — keep only marker portion for next chunk
-          this.buffer = this.buffer.slice(markerIdx);
-          break;
-        }
-        const blockName = afterPrefix.slice(0, nameEnd);
-
-        if (blockName === 'tool_call') {
-          // Known: tool_call block
-          this.buffer = afterPrefix.slice(nameEnd + 1);
+        // Which tag did we find?
+        if (tagIdx === tcIdx) {
+          // [#l2a:tool_call]
+          this.buffer = this.buffer.slice(tagIdx + TC_START.length);
           this.capturing = true;
+          this.currentField = null;
+          this.toolCallIndex++;
+          events.push({ type: 'tool_call_start' });
           continue;
         }
 
-        // Unknown block: find corresponding end marker
-        this.unknownBlockEnd = `[$llmweb2api:${blockName}]`;
-        this.buffer = afterPrefix.slice(nameEnd + 1);
+        // Some other [#l2a:ROLE] — unknown block
+        const afterPrefix = this.buffer.slice(tagIdx + TAG_PREFIX.length);
+        const endBracket = afterPrefix.indexOf(']');
+        if (endBracket < 0) {
+          // Partial — keep
+          this.buffer = this.buffer.slice(tagIdx);
+          break;
+        }
+        const role = afterPrefix.slice(0, endBracket);
+        this.unknownBlockRole = role;
+        this.buffer = afterPrefix.slice(endBracket + 1);
         continue;
       }
 
-      // Inside unknown block: find end marker, emit content without markers
-      if (this.unknownBlockEnd) {
-        const endIdx = this.buffer.indexOf(this.unknownBlockEnd);
+      // ── Inside unknown block: find [/l2a:ROLE] at line start ──────
+      if (this.unknownBlockRole) {
+        const endMarker = `[/l2a:${this.unknownBlockRole}]`;
+        const endIdx = this.findAtLineStart(endMarker);
         if (endIdx < 0) {
-          // Check for partial end marker
-          const partial = this.checkPartialEnd(this.unknownBlockEnd);
+          const partial = this.checkPartialAtLineEnd();
           if (partial) {
-            const innerContent = this.buffer.slice(0, -partial.length);
+            const inner = this.buffer.slice(0, -partial.length);
             this.buffer = partial;
-            if (innerContent) events.push({ type: 'content', text: innerContent });
+            if (inner) events.push({ type: 'content', text: inner });
           }
           break;
         }
-        // Found end marker → emit inner content, strip both markers
         const inner = this.buffer.slice(0, endIdx);
-        this.buffer = this.buffer.slice(endIdx + this.unknownBlockEnd.length);
-        this.unknownBlockEnd = null;
+        this.buffer = this.buffer.slice(endIdx + endMarker.length);
+        this.unknownBlockRole = null;
         if (inner) events.push({ type: 'content', text: inner });
         continue;
       }
 
-      // Capturing tool_call: find end marker
-      const endIdx = this.buffer.indexOf(END_MARKER);
-      if (endIdx < 0) {
-        const partial = this.checkEndPartial();
+      // ── Inside tool_call: look for parameter, parameter end, or [/l2a:tool_call] ──
+      const endIdx = this.findAtLineStart(TC_END);
+      const paramIdx = this.findParamAtLineStart();
+      const paramEndIdx = this.findParamEnd(); // no line-start req — end tags can be inline
+
+      if (endIdx < 0 && paramIdx < 0 && paramEndIdx < 0) {
+        const partial = this.checkPartialAtLineEnd();
         if (partial) {
-          // Keep partial in buffer, it might complete next chunk
+          const content = this.buffer.slice(0, -partial.length);
+          this.buffer = partial;
+          if (content) this.emitFieldDelta(events, content);
+        } else {
+          if (this.buffer) {
+            this.emitFieldDelta(events, this.buffer);
+            this.buffer = '';
+          }
         }
         break;
       }
 
-      const body = this.buffer.slice(0, endIdx);
-      this.buffer = this.buffer.slice(endIdx + END_MARKER.length);
-      this.capturing = false;
+      // Pick the earliest marker
+      const candidates: Array<{ idx: number; kind: 'end' | 'param' | 'paramEnd' }> = [];
+      if (endIdx >= 0) candidates.push({ idx: endIdx, kind: 'end' });
+      if (paramIdx >= 0) candidates.push({ idx: paramIdx, kind: 'param' });
+      if (paramEndIdx >= 0) candidates.push({ idx: paramEndIdx, kind: 'paramEnd' });
+      candidates.sort((a, b) => a.idx - b.idx);
+      const first = candidates[0];
 
-      const toolCalls = parseToolCallBlock(body);
-      if (toolCalls.length > 0) {
-        events.push({ type: 'tool_calls', toolCalls });
-      } else if (body.trim()) {
-        console.error('[TOOL_SIEVE] Captured tool_call block but failed to parse.');
-        console.error('[TOOL_SIEVE] Body:', body);
-        // Emit as text so client sees the raw block — prevents conversation state mismatch
-        events.push({ type: 'content', text: START_MARKER + '\n' + body + '\n' + END_MARKER });
+      if (first.kind === 'end') {
+        // [/l2a:tool_call] — end tool_call or close current parameter
+        if (endIdx > 0) {
+          this.emitFieldDelta(events, this.buffer.slice(0, endIdx));
+        }
+        if (this.currentField) {
+          events.push({ type: 'tool_call_field_end', field: this.currentField });
+          this.currentField = null;
+          this.buffer = this.buffer.slice(endIdx + TC_END.length);
+          continue;
+        }
+        // No field open → end tool_call
+        this.buffer = this.buffer.slice(endIdx + TC_END.length);
+        this.capturing = false;
+        events.push({ type: 'tool_call_end' });
+        continue;
       }
+
+      if (first.kind === 'paramEnd') {
+        // [/l2a:parameter:X] — verify tag is complete (has closing ']')
+        const afterPrefix = this.buffer.slice(paramEndIdx + PARAM_END_PREFIX.length);
+        const closingBracket = afterPrefix.indexOf(']');
+        if (closingBracket < 0) {
+          // Partial tag — hold in buffer, wait for next chunk
+          if (paramEndIdx > 0) {
+            this.emitFieldDelta(events, this.buffer.slice(0, paramEndIdx));
+          }
+          this.buffer = this.buffer.slice(paramEndIdx);
+          break;
+        }
+        // Complete tag — close current parameter
+        if (paramEndIdx > 0) {
+          this.emitFieldDelta(events, this.buffer.slice(0, paramEndIdx));
+        }
+        if (this.currentField) {
+          events.push({ type: 'tool_call_field_end', field: this.currentField });
+          this.currentField = null;
+        }
+        this.buffer = afterPrefix.slice(closingBracket + 1);
+        continue;
+      }
+
+      // Parameter found: [#l2a:parameter:X]
+      const afterParam = this.buffer.slice(paramIdx + PARAM_PREFIX.length);
+      const endBracketIdx = afterParam.indexOf(']');
+      if (endBracketIdx < 0) {
+        // Partial parameter — keep
+        const partial = this.buffer.slice(paramIdx);
+        const content = this.buffer.slice(0, paramIdx);
+        this.buffer = partial;
+        if (content) this.emitFieldDelta(events, content);
+        break;
+      }
+
+      const field = afterParam.slice(0, endBracketIdx);
+
+      // Emit content before this parameter
+      if (paramIdx > 0) {
+        this.emitFieldDelta(events, this.buffer.slice(0, paramIdx));
+      }
+
+      // Close previous field
+      if (this.currentField) {
+        events.push({ type: 'tool_call_field_end', field: this.currentField });
+      }
+
+      // Start new field
+      this.currentField = field;
+      this.buffer = afterParam.slice(endBracketIdx + 1);
+      events.push({ type: 'tool_call_field_start', field });
       continue;
     }
 
@@ -139,29 +226,25 @@ export class ToolSieve {
     const events: SieveEvent[] = [];
 
     if (this.capturing) {
-      let body = this.buffer;
-      const partial = this.checkEndPartial();
-      if (partial) {
-        body = body.slice(0, -partial.length);
-      }
-
-      const toolCalls = parseToolCallBlock(body);
-      if (toolCalls.length > 0) {
-        events.push({ type: 'tool_calls', toolCalls });
-      } else {
-        if (body.trim()) {
-          console.error('[TOOL_SIEVE] Flush: unclosed tool_call block failed to parse.');
-          console.error('[TOOL_SIEVE] Body:', body);
-        }
-        if (this.buffer) {
-          events.push({ type: 'content', text: START_MARKER + this.buffer });
+      if (this.buffer) {
+        const partial = this.checkPartialAtLineEnd();
+        if (partial) {
+          const content = this.buffer.slice(0, -partial.length);
+          if (content) this.emitFieldDelta(events, content);
+        } else {
+          this.emitFieldDelta(events, this.buffer);
         }
       }
+      if (this.currentField) {
+        events.push({ type: 'tool_call_field_end', field: this.currentField });
+        this.currentField = null;
+      }
+      events.push({ type: 'tool_call_end' });
       this.capturing = false;
-    } else if (this.unknownBlockEnd) {
-      // Unknown block didn't close → emit with markers as-is
-      events.push({ type: 'content', text: `${MARKER_PREFIX}${this.unknownBlockEnd.slice('[$llmweb2api:'.length, -1)}]${this.buffer}` });
-      this.unknownBlockEnd = null;
+    } else if (this.unknownBlockRole) {
+      const roleTag = `[#l2a:${this.unknownBlockRole}]`;
+      events.push({ type: 'content', text: roleTag + this.buffer });
+      this.unknownBlockRole = null;
     } else if (this.buffer) {
       events.push({ type: 'content', text: this.buffer });
     }
@@ -170,28 +253,120 @@ export class ToolSieve {
     return events;
   }
 
-  // Check if buffer ends with a partial of ANY [#llmweb2api: prefix
-  private checkAnyPartial(): string | null {
-    for (let i = 1; i <= MARKER_PREFIX.length; i++) {
-      const p = MARKER_PREFIX.slice(0, i);
-      if (this.buffer.endsWith(p)) return p;
-    }
-    // Also check tool_call partials (for compatibility)
-    for (const p of UNIQUE_PARTIALS) {
-      if (this.buffer.endsWith(p)) return p;
-    }
-    return null;
+  reset() {
+    this.buffer = '';
+    this.capturing = false;
+    this.currentField = null;
+    this.unknownBlockRole = null;
   }
 
-  private checkPartialEnd(marker: string): string | null {
-    for (let i = 1; i < marker.length; i++) {
-      const p = marker.slice(0, i);
-      if (this.buffer.endsWith(p)) return p;
+  // ── Private helpers ────────────────────────────────────────────
+
+  private findAtLineStart(tag: string): number {
+    let searchFrom = 0;
+    while (searchFrom < this.buffer.length) {
+      const idx = this.buffer.indexOf(tag, searchFrom);
+      if (idx < 0) return -1;
+      if (idx === 0 || this.buffer[idx - 1] === '\n') return idx;
+      searchFrom = idx + 1;
     }
-    return null;
+    return -1;
   }
 
-  private checkEndPartial(): string | null {
-    return this.checkPartialEnd(END_MARKER);
+  // Find [#l2a:ROLE] (not tool_call) at line start
+  private findOtherMarkerAtLineStart(): number {
+    let searchFrom = 0;
+    while (searchFrom < this.buffer.length) {
+      const idx = this.buffer.indexOf(TAG_PREFIX, searchFrom);
+      if (idx < 0) return -1;
+      if (idx !== 0 && this.buffer[idx - 1] !== '\n') {
+        searchFrom = idx + 1;
+        continue;
+      }
+      // Check it's not [#l2a:tool_call]
+      if (this.buffer.startsWith(TC_START, idx)) {
+        searchFrom = idx + 1;
+        continue;
+      }
+      // Must have a valid role (ends with ])
+      const after = this.buffer.slice(idx + TAG_PREFIX.length);
+      const endBracket = after.indexOf(']');
+      if (endBracket < 0) {
+        // Partial — could be tool_call or other, treat as partial
+        searchFrom = idx + 1;
+        continue;
+      }
+      return idx;
+    }
+    return -1;
+  }
+
+  // Find [/l2a:parameter:X] — no line-start req, end tags can be inline
+  private findParamEnd(): number {
+    return this.buffer.indexOf(PARAM_END_PREFIX);
+  }
+
+  // Find [#l2a:parameter:X] at line start
+  private findParamAtLineStart(): number {
+    let searchFrom = 0;
+    while (searchFrom < this.buffer.length) {
+      const idx = this.buffer.indexOf(PARAM_PREFIX, searchFrom);
+      if (idx < 0) return -1;
+      if (idx !== 0 && this.buffer[idx - 1] !== '\n') {
+        searchFrom = idx + 1;
+        continue;
+      }
+      return idx;
+    }
+    return -1;
+  }
+
+  private closest(a: number, b: number): number {
+    if (a < 0 && b < 0) return -1;
+    if (a < 0) return b;
+    if (b < 0) return a;
+    return Math.min(a, b);
+  }
+
+  private emitFieldDelta(events: SieveEvent[], text: string) {
+    if (!text) return;
+    const field = this.currentField || 'unknown';
+    const normalizedText = field === 'id' || field === 'name' ? text.trim() : text;
+    if (!normalizedText) return;
+    events.push({ type: 'tool_call_field_delta', field, text: normalizedText });
+  }
+
+  private checkPartialAtLineEnd(): string | null {
+    // Known fixed prefixes from TAG_PREFIX and TAG_END_PREFIX
+    for (const p of PARTIALS) {
+      if (this.buffer.endsWith(p)) {
+        const partialStart = this.buffer.length - p.length;
+        if (partialStart === 0 || this.buffer[partialStart - 1] === '\n') {
+          return p;
+        }
+      }
+    }
+
+    // Detect partial [#l2a:...] tag where chunk boundary falls inside the role name
+    // e.g. buffer ends with "[#l2a:tool_cal" — no closing ']' yet
+    const lastOpen = this.buffer.lastIndexOf(TAG_PREFIX);
+    if (lastOpen >= 0 && (lastOpen === 0 || this.buffer[lastOpen - 1] === '\n')) {
+      const after = this.buffer.slice(lastOpen + TAG_PREFIX.length);
+      if (after.length > 0 && !after.includes(']')) {
+        return this.buffer.slice(lastOpen);
+      }
+    }
+
+    // Detect partial [/l2a:...] tag
+    // e.g. buffer ends with "[/l2a:parameter:i" — no closing ']' yet
+    const lastEnd = this.buffer.lastIndexOf(TAG_END_PREFIX);
+    if (lastEnd >= 0 && (lastEnd === 0 || this.buffer[lastEnd - 1] === '\n')) {
+      const after = this.buffer.slice(lastEnd + TAG_END_PREFIX.length);
+      if (after.length > 0 && !after.includes(']')) {
+        return this.buffer.slice(lastEnd);
+      }
+    }
+
+    return null;
   }
 }

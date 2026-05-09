@@ -1,20 +1,36 @@
 import crypto from 'crypto';
 import type { Provider, SessionContext } from '../../types/provider';
-import type { InternalRequest, InternalResponse, InternalStreamChunk, ToolCallDelta } from '../../types/common';
+import type { InternalMessage, InternalRequest, InternalResponse, InternalStreamChunk } from '../../types/common';
 import * as client from './client';
 import type { DeepSeekCompletionPayload } from './types';
 import { FILE_UPLOAD_THRESHOLD } from './types';
 import { getModelType } from './models';
-import { TOOL_SYSTEM_PROMPT, buildToolPrompt, block, BlockName } from '../core/tool_prompt';
+import { hashMessage } from '../core/hash';
+import { TOOL_SYSTEM_PROMPT, buildToolPrompt, block, toolBlock } from '../core/tool_prompt';
 import { ToolSieve } from '../core/tool_sieve';
 import { parseToolCallXML } from '../core/tool_parser';
-import type { ParsedToolCall } from '../core/tool_parser';
 
 interface ImageRef {
   url: string;
   isDataUrl: boolean;
   mimeType?: string;
 }
+
+interface ImageSummary {
+  messageHash: string;
+  summary: string;
+  imageCount: number;
+}
+
+const VISION_SYSTEM_PROMPT = `Bạn là model vision phụ trợ. Hãy phân tích các ảnh được đính kèm để hỗ trợ model chính không có vision.
+
+Yêu cầu:
+- Trả lời bằng tiếng Việt nếu người dùng dùng tiếng Việt.
+- Mô tả các chi tiết quan trọng trong ảnh.
+- OCR mọi chữ nhìn thấy được nếu có.
+- Trả lời trực tiếp yêu cầu cuối của người dùng dựa trên ảnh.
+- Không gọi công cụ.
+- Không nói rằng bạn không thấy ảnh nếu ảnh đã được đính kèm.`;
 
 type ToolDef = {
   type: 'function';
@@ -29,7 +45,11 @@ class DeepSeekProvider implements Provider {
   private sentConversationId = new Set<string>();
   private conversationTokens = new Map<string, { inputTokens: number; outputTokens: number }>();
 
-  private accumulateTokens(sessionId: string, inputTokens: number, outputTokens: number): {
+  private accumulateTokens(
+    sessionId: string,
+    inputTokens: number,
+    outputTokens: number,
+  ): {
     cumulativeInputTokens: number;
     cumulativeOutputTokens: number;
   } {
@@ -66,15 +86,28 @@ class DeepSeekProvider implements Provider {
   }
 
   async chat(ctx: SessionContext, request: InternalRequest): Promise<InternalResponse> {
+    request = await this.prepareVisionRequest(ctx, request);
     const forceTools = ctx.metadata.toolsChanged === true;
     const isRestoredSession = ctx.metadata.isRestoredSession === true;
-    const { prompt, refFileIds } = await this.buildPromptAndFiles(ctx.token, ctx.sessionId, request, forceTools, isRestoredSession);
+    const { prompt, refFileIds } = await this.buildPromptAndFiles(
+      ctx.token,
+      ctx.sessionId,
+      request,
+      forceTools,
+      isRestoredSession,
+    );
     const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/completion');
     const parentMessageId = ctx.metadata.parentMessageId ? Number(ctx.metadata.parentMessageId) : null;
+    const modelType = getModelType(request.providerModel || request.model);
+    console.log(
+      `[DEEPSEEK] completion payload: sessionId=${ctx.sessionId.slice(0, 12)} ` +
+        `parentMsgId=${parentMessageId} modelType=${modelType} promptLen=${prompt.length} ` +
+        `refFiles=${refFileIds.length}`,
+    );
     const payload: DeepSeekCompletionPayload = {
       chat_session_id: ctx.sessionId,
       parent_message_id: parentMessageId,
-      model_type: getModelType(request.providerModel || request.model),
+      model_type: modelType,
       prompt,
       thinking_enabled: !!request.reasoningEffort,
       search_enabled: true,
@@ -117,8 +150,8 @@ class DeepSeekProvider implements Provider {
     if (toolCalls.length > 0) {
       responseContent = '';
       finishReason = 'tool_calls';
-    } else if (text.includes('[#llmweb2api:tool_call]')) {
-      console.error('[DEEPSEEK] Non-stream: text contains tool_call marker but parsed 0 tool calls.');
+    } else if (text.includes('[#l2a:tool_call]') && toolCalls.length === 0) {
+      console.error('[DEEPSEEK] Non-stream: text contains tool_call tag but parsed 0 tool calls.');
       console.error('[DEEPSEEK] Full response text:', text);
     }
 
@@ -147,26 +180,24 @@ class DeepSeekProvider implements Provider {
     };
   }
 
-  async *chatStream(ctx: SessionContext, request: InternalRequest, signal?: AbortSignal): AsyncGenerator<InternalStreamChunk> {
+  async *chatStream(
+    ctx: SessionContext,
+    request: InternalRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<InternalStreamChunk> {
+    request = await this.prepareVisionRequest(ctx, request, signal);
     const editMessageId = ctx.metadata.editMessageId as number | undefined;
 
     const parentMsgId = ctx.metadata.parentMessageId;
     console.log(
       `[DEEPSEEK] chatStream: editMsgId=${editMessageId ?? '<none>'} ` +
-      `parentMsgId=${parentMsgId ?? '<none>'} ` +
-      `msgs=${request.messages.length} roles=[${request.messages.map((m) => m.role).join(',')}]`,
+        `parentMsgId=${parentMsgId ?? '<none>'} ` +
+        `msgs=${request.messages.length} roles=[${request.messages.map((m) => m.role).join(',')}]`,
     );
 
     // Regeneration via edit_message
     if (editMessageId) {
-      const lastUserMsg = [...request.messages].reverse().find((m) => m.role === 'user');
-      const msgContent = lastUserMsg
-        ? typeof lastUserMsg.content === 'string'
-          ? lastUserMsg.content
-          : Array.isArray(lastUserMsg.content)
-            ? lastUserMsg.content.map((b: any) => b.text || '').join('')
-            : ''
-        : '';
+      const msgContent = buildEditMessagePrompt(request);
       const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/edit_message');
       const editPayload: client.EditMessagePayload = {
         chat_session_id: ctx.sessionId,
@@ -182,11 +213,224 @@ class DeepSeekProvider implements Provider {
       let firstChunk = true;
       let gotMessageId = false;
       let hasToolCalls = false;
+      let toolCallIndex = 0;
+      let tcCallId = '';
+      let tcName = '';
       const sieve = new ToolSieve();
 
       try {
         for await (const line of client.streamEditMessageLines(ctx.token, powResponse, editPayload, signal)) {
           if (signal?.aborted) return;
+          const raw = line.slice(5).trim();
+          if (!raw) continue;
+          if (raw.indexOf('FINISHED') >= 0 && raw.indexOf('response/status') >= 0) break;
+
+          try {
+            const chunk = JSON.parse(raw);
+
+            if (!gotMessageId && chunk.response_message_id != null) {
+              ctx.metadata.lastResponseMessageId = String(chunk.response_message_id);
+              if (chunk.request_message_id != null) {
+                ctx.metadata.lastRequestMessageId = String(chunk.request_message_id);
+              }
+              gotMessageId = true;
+              continue;
+            }
+            const result = parseContent(chunk, currentFragmentType);
+            if (result) {
+              currentFragmentType = result.nextType;
+              if (result.content || result.reasoningContent) {
+                const content = result.content;
+                let reasoning = result.reasoningContent;
+
+                if (firstChunk && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
+                  yield {
+                    id: streamId,
+                    model: request.model,
+                    content: '',
+                    reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
+                    finishReason: null,
+                  };
+                  this.sentConversationId.add(ctx.sessionId);
+                }
+                firstChunk = false;
+
+                if (content) {
+                  const events = sieve.processChunk(content);
+                  for (const ev of events) {
+                    if (ev.type === 'content' && hasText(ev.text)) {
+                      totalTokens += this.estimateTokens(ev.text);
+                      yield {
+                        id: streamId,
+                        model: request.model,
+                        content: ev.text,
+                        reasoningContent: reasoning || undefined,
+                        finishReason: null,
+                      };
+                      reasoning = undefined;
+                    } else if (ev.type === 'tool_call_start') {
+                      hasToolCalls = true;
+                      toolCallIndex++;
+                      tcCallId = '';
+                      tcName = '';
+                    } else if (ev.type === 'tool_call_field_delta') {
+                      if (ev.field === 'id') tcCallId += ev.text || '';
+                      else if (ev.field === 'name') tcName += ev.text || '';
+                      else if (ev.field === 'arguments' || ev.field?.startsWith('arguments')) {
+                        totalTokens += this.estimateTokens(ev.text || '');
+                        yield {
+                          id: streamId,
+                          model: request.model,
+                          content: '',
+                          toolCallDelta: { index: toolCallIndex - 1, function: { arguments: ev.text } },
+                          finishReason: null,
+                        };
+                      }
+                    } else if (ev.type === 'tool_call_field_end') {
+                      if (ev.field === 'name') {
+                        const callId = tcCallId || `call_${streamId}_${toolCallIndex - 1}_${tcName}`;
+                        totalTokens += this.estimateTokens(tcName);
+                        yield {
+                          id: streamId,
+                          model: request.model,
+                          content: '',
+                          toolCallDelta: {
+                            index: toolCallIndex - 1,
+                            id: callId,
+                            type: 'function',
+                            function: { name: tcName, arguments: '' },
+                          },
+                          finishReason: null,
+                        };
+                      }
+                    }
+                  }
+                  reasoning = undefined;
+                } else if (hasText(reasoning)) {
+                  yield {
+                    id: streamId,
+                    model: request.model,
+                    content: '',
+                    reasoningContent: reasoning,
+                    finishReason: null,
+                  };
+                }
+              }
+            }
+          } catch {
+            continue;
+          }
+        }
+      } finally {
+        if (signal?.aborted && ctx.metadata.lastResponseMessageId) {
+          client.stopStream(ctx.token, ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
+        }
+      }
+
+      if (signal?.aborted) return;
+
+      // Flush
+      const flushEvents = sieve.flush();
+      for (const ev of flushEvents) {
+        if (ev.type === 'content' && hasText(ev.text)) {
+          totalTokens += this.estimateTokens(ev.text);
+          yield { id: streamId, model: request.model, content: ev.text, finishReason: null };
+        } else if (ev.type === 'tool_call_start') {
+          hasToolCalls = true;
+          toolCallIndex++;
+          tcCallId = '';
+          tcName = '';
+        } else if (ev.type === 'tool_call_field_delta') {
+          if (ev.field === 'id') tcCallId += ev.text || '';
+          else if (ev.field === 'name') tcName += ev.text || '';
+          else if (ev.field === 'arguments' || ev.field?.startsWith('arguments')) {
+            totalTokens += this.estimateTokens(ev.text || '');
+            yield {
+              id: streamId,
+              model: request.model,
+              content: '',
+              toolCallDelta: { index: toolCallIndex - 1, function: { arguments: ev.text } },
+              finishReason: null,
+            };
+          }
+        } else if (ev.type === 'tool_call_field_end') {
+          if (ev.field === 'name') {
+            const callId = tcCallId || `call_${streamId}_${toolCallIndex - 1}_${tcName}`;
+            totalTokens += this.estimateTokens(tcName);
+            yield {
+              id: streamId,
+              model: request.model,
+              content: '',
+              toolCallDelta: {
+                index: toolCallIndex - 1,
+                id: callId,
+                type: 'function',
+                function: { name: tcName, arguments: '' },
+              },
+              finishReason: null,
+            };
+          }
+        }
+      }
+
+      this.uploadedFileIds = [];
+
+      const editInputTokens = this.estimateTokens(msgContent);
+      const editCumulative = this.accumulateTokens(ctx.sessionId, editInputTokens, totalTokens);
+      yield {
+        id: streamId,
+        model: request.model,
+        content: '',
+        finishReason: hasToolCalls ? 'tool_calls' : 'stop',
+        usage: { inputTokens: editInputTokens, outputTokens: totalTokens, ...editCumulative },
+      };
+      return;
+    }
+
+    // Normal completion flow
+    if (signal?.aborted) return;
+    const forceTools = ctx.metadata.toolsChanged === true;
+    const isRestoredSession = ctx.metadata.isRestoredSession === true;
+    const { prompt, refFileIds } = await this.buildPromptAndFiles(
+      ctx.token,
+      ctx.sessionId,
+      request,
+      forceTools,
+      isRestoredSession,
+    );
+    if (signal?.aborted) return;
+    const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/completion');
+    const parentMessageId = ctx.metadata.parentMessageId ? Number(ctx.metadata.parentMessageId) : null;
+    const modelType = getModelType(request.providerModel || request.model);
+    console.log(
+      `[DEEPSEEK] completion payload: sessionId=${ctx.sessionId.slice(0, 12)} ` +
+        `parentMsgId=${parentMessageId} modelType=${modelType} promptLen=${prompt.length} ` +
+        `refFiles=${refFileIds.length}`,
+    );
+    const payload: DeepSeekCompletionPayload = {
+      chat_session_id: ctx.sessionId,
+      parent_message_id: parentMessageId,
+      model_type: modelType,
+      prompt,
+      thinking_enabled: !!request.reasoningEffort,
+      search_enabled: true,
+      ref_file_ids: refFileIds.length > 0 ? refFileIds : [],
+    };
+
+    const streamId = `ds-${Date.now()}`;
+    let totalTokens = 0;
+    let currentFragmentType: string | null = null;
+    let firstChunk = true;
+    let gotMessageId = false;
+    let hasToolCalls = false;
+    let toolCallIndex = 0;
+    let tcCallId = '';
+    let tcName = '';
+    const sieve = new ToolSieve();
+
+    try {
+      for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, signal)) {
+        if (signal?.aborted) return;
         const raw = line.slice(5).trim();
         if (!raw) continue;
         if (raw.indexOf('FINISHED') >= 0 && raw.indexOf('response/status') >= 0) break;
@@ -234,20 +478,43 @@ class DeepSeekProvider implements Provider {
                       finishReason: null,
                     };
                     reasoning = undefined;
-                  } else if (ev.type === 'tool_calls' && ev.toolCalls) {
+                  } else if (ev.type === 'tool_call_start') {
                     hasToolCalls = true;
-                    for (const delta of buildToolCallDeltas(ev.toolCalls, streamId)) {
+                    toolCallIndex++;
+                    tcCallId = '';
+                    tcName = '';
+                  } else if (ev.type === 'tool_call_field_delta') {
+                    if (ev.field === 'id') tcCallId += ev.text || '';
+                    else if (ev.field === 'name') tcName += ev.text || '';
+                    else if (ev.field === 'arguments' || ev.field?.startsWith('arguments')) {
+                      totalTokens += this.estimateTokens(ev.text || '');
                       yield {
                         id: streamId,
                         model: request.model,
                         content: '',
-                        toolCallDelta: delta,
+                        toolCallDelta: { index: toolCallIndex - 1, function: { arguments: ev.text } },
+                        finishReason: null,
+                      };
+                    }
+                  } else if (ev.type === 'tool_call_field_end') {
+                    if (ev.field === 'name') {
+                      const callId = tcCallId || `call_${streamId}_${toolCallIndex - 1}_${tcName}`;
+                      totalTokens += this.estimateTokens(tcName);
+                      yield {
+                        id: streamId,
+                        model: request.model,
+                        content: '',
+                        toolCallDelta: {
+                          index: toolCallIndex - 1,
+                          id: callId,
+                          type: 'function',
+                          function: { name: tcName, arguments: '' },
+                        },
                         finishReason: null,
                       };
                     }
                   }
                 }
-                reasoning = undefined;
               } else if (hasText(reasoning)) {
                 yield {
                   id: streamId,
@@ -262,150 +529,6 @@ class DeepSeekProvider implements Provider {
         } catch {
           continue;
         }
-        }
-      } finally {
-        if (signal?.aborted && ctx.metadata.lastResponseMessageId) {
-          client.stopStream(ctx.token, ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
-        }
-      }
-
-      if (signal?.aborted) return;
-
-      // Flush
-      const flushEvents = sieve.flush();
-      for (const ev of flushEvents) {
-        if (ev.type === 'content' && hasText(ev.text)) {
-          totalTokens += this.estimateTokens(ev.text);
-          yield { id: streamId, model: request.model, content: ev.text, finishReason: null };
-        } else if (ev.type === 'tool_calls' && ev.toolCalls) {
-          hasToolCalls = true;
-          for (const delta of buildToolCallDeltas(ev.toolCalls, streamId)) {
-            yield { id: streamId, model: request.model, content: '', toolCallDelta: delta, finishReason: null };
-          }
-        }
-      }
-
-      this.uploadedFileIds = [];
-
-      const editInputTokens = this.estimateTokens(msgContent);
-      const editCumulative = this.accumulateTokens(ctx.sessionId, editInputTokens, totalTokens);
-      yield {
-        id: streamId,
-        model: request.model,
-        content: '',
-        finishReason: hasToolCalls ? 'tool_calls' : 'stop',
-        usage: { inputTokens: editInputTokens, outputTokens: totalTokens, ...editCumulative },
-      };
-      return;
-    }
-
-    // Normal completion flow
-    if (signal?.aborted) return;
-    const forceTools = ctx.metadata.toolsChanged === true;
-    const isRestoredSession = ctx.metadata.isRestoredSession === true;
-    const { prompt, refFileIds } = await this.buildPromptAndFiles(ctx.token, ctx.sessionId, request, forceTools, isRestoredSession);
-    if (signal?.aborted) return;
-    const powResponse = await client.getPowForTarget(ctx.token, '/api/v0/chat/completion');
-    const parentMessageId = ctx.metadata.parentMessageId ? Number(ctx.metadata.parentMessageId) : null;
-    console.log(
-      `[DEEPSEEK] completion payload: sessionId=${ctx.sessionId.slice(0, 12)} ` +
-      `parentMsgId=${parentMessageId} promptLen=${prompt.length}`,
-    );
-    const payload: DeepSeekCompletionPayload = {
-      chat_session_id: ctx.sessionId,
-      parent_message_id: parentMessageId,
-      model_type: getModelType(request.providerModel || request.model),
-      prompt,
-      thinking_enabled: !!request.reasoningEffort,
-      search_enabled: true,
-      ref_file_ids: refFileIds.length > 0 ? refFileIds : [],
-    };
-
-    const streamId = `ds-${Date.now()}`;
-    let totalTokens = 0;
-    let currentFragmentType: string | null = null;
-    let firstChunk = true;
-    let gotMessageId = false;
-    let hasToolCalls = false;
-    const sieve = new ToolSieve();
-
-    try {
-      for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, signal)) {
-        if (signal?.aborted) return;
-      const raw = line.slice(5).trim();
-      if (!raw) continue;
-      if (raw.indexOf('FINISHED') >= 0 && raw.indexOf('response/status') >= 0) break;
-
-      try {
-        const chunk = JSON.parse(raw);
-
-        if (!gotMessageId && chunk.response_message_id != null) {
-          ctx.metadata.lastResponseMessageId = String(chunk.response_message_id);
-          if (chunk.request_message_id != null) {
-            ctx.metadata.lastRequestMessageId = String(chunk.request_message_id);
-          }
-          gotMessageId = true;
-          continue;
-        }
-        const result = parseContent(chunk, currentFragmentType);
-        if (result) {
-          currentFragmentType = result.nextType;
-          if (result.content || result.reasoningContent) {
-            const content = result.content;
-            let reasoning = result.reasoningContent;
-
-            if (firstChunk && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-              yield {
-                id: streamId,
-                model: request.model,
-                content: '',
-                reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
-                finishReason: null,
-              };
-              this.sentConversationId.add(ctx.sessionId);
-            }
-            firstChunk = false;
-
-            if (content) {
-              const events = sieve.processChunk(content);
-              for (const ev of events) {
-                if (ev.type === 'content' && hasText(ev.text)) {
-                  totalTokens += this.estimateTokens(ev.text);
-                  yield {
-                    id: streamId,
-                    model: request.model,
-                    content: ev.text,
-                    reasoningContent: reasoning || undefined,
-                    finishReason: null,
-                  };
-                  reasoning = undefined;
-                } else if (ev.type === 'tool_calls' && ev.toolCalls) {
-                  hasToolCalls = true;
-                  for (const delta of buildToolCallDeltas(ev.toolCalls, streamId)) {
-                    yield {
-                      id: streamId,
-                      model: request.model,
-                      content: '',
-                      toolCallDelta: delta,
-                      finishReason: null,
-                    };
-                  }
-                }
-              }
-            } else if (hasText(reasoning)) {
-              yield {
-                id: streamId,
-                model: request.model,
-                content: '',
-                reasoningContent: reasoning,
-                finishReason: null,
-              };
-            }
-          }
-        }
-      } catch {
-        continue;
-      }
       }
     } finally {
       if (signal?.aborted && ctx.metadata.lastResponseMessageId) {
@@ -426,14 +549,38 @@ class DeepSeekProvider implements Provider {
           content: ev.text,
           finishReason: null,
         };
-      } else if (ev.type === 'tool_calls' && ev.toolCalls) {
+      } else if (ev.type === 'tool_call_start') {
         hasToolCalls = true;
-        for (const delta of buildToolCallDeltas(ev.toolCalls, streamId)) {
+        toolCallIndex++;
+        tcCallId = '';
+        tcName = '';
+      } else if (ev.type === 'tool_call_field_delta') {
+        if (ev.field === 'id') tcCallId += ev.text || '';
+        else if (ev.field === 'name') tcName += ev.text || '';
+        else if (ev.field === 'arguments' || ev.field?.startsWith('arguments')) {
+          totalTokens += this.estimateTokens(ev.text || '');
           yield {
             id: streamId,
             model: request.model,
             content: '',
-            toolCallDelta: delta,
+            toolCallDelta: { index: toolCallIndex - 1, function: { arguments: ev.text } },
+            finishReason: null,
+          };
+        }
+      } else if (ev.type === 'tool_call_field_end') {
+        if (ev.field === 'name') {
+          const callId = tcCallId || `call_${streamId}_${toolCallIndex - 1}_${tcName}`;
+          totalTokens += this.estimateTokens(tcName);
+          yield {
+            id: streamId,
+            model: request.model,
+            content: '',
+            toolCallDelta: {
+              index: toolCallIndex - 1,
+              id: callId,
+              type: 'function',
+              function: { name: tcName, arguments: '' },
+            },
             finishReason: null,
           };
         }
@@ -465,6 +612,102 @@ class DeepSeekProvider implements Provider {
     }
   }
 
+  private async prepareVisionRequest(
+    ctx: SessionContext,
+    request: InternalRequest,
+    signal?: AbortSignal,
+  ): Promise<InternalRequest> {
+    const cachedSummaries = (ctx.metadata.cachedImageSummaries as ImageSummary[] | undefined) ?? [];
+    const imageMessages = request.messages.filter(hasImageMessage);
+    if (imageMessages.length === 0) {
+      if (cachedSummaries.length === 0) return request;
+      return {
+        ...request,
+        messages: rewriteMessagesWithVisionHandoffs(request.messages, cachedSummaries),
+      };
+    }
+
+    const visionSummary = await this.runVisionSideSession(ctx.token, request, signal);
+    if (!hasText(visionSummary)) {
+      throw new Error('Vision side-session returned empty summary');
+    }
+
+    const summaries: ImageSummary[] = imageMessages.map((msg) => ({
+      messageHash: hashMessage(msg),
+      summary: visionSummary,
+      imageCount: countImageBlocks(msg),
+    }));
+    ctx.metadata.imageSummaries = [
+      ...((ctx.metadata.imageSummaries as ImageSummary[] | undefined) ?? []),
+      ...summaries,
+    ];
+
+    console.log(
+      `[VISION] prepared handoff summaries=${summaries.length} imageCount=${summaries.reduce(
+        (sum, item) => sum + item.imageCount,
+        0,
+      )}`,
+    );
+
+    return {
+      ...request,
+      messages: rewriteMessagesWithVisionHandoffs(request.messages, [...cachedSummaries, ...summaries]),
+    };
+  }
+
+  private async runVisionSideSession(token: string, request: InternalRequest, signal?: AbortSignal): Promise<string> {
+    const tempSessionId = await client.createSession(token);
+    const imageRefs = extractImageRefs(request.messages as Array<{ role: string; content: unknown }>);
+    const refFileIds = imageRefs.length > 0 ? await uploadImageRefs(token, imageRefs) : [];
+    let text = '';
+    let currentFragmentType: string | null = null;
+
+    try {
+      const prompt = buildVisionPrompt(request);
+      const powResponse = await client.getPowForTarget(token, '/api/v0/chat/completion');
+      const payload: DeepSeekCompletionPayload = {
+        chat_session_id: tempSessionId,
+        parent_message_id: null,
+        model_type: 'vision',
+        prompt,
+        thinking_enabled: false,
+        search_enabled: false,
+        ref_file_ids: refFileIds,
+      };
+
+      console.log(
+        `[VISION] temp completion session=${tempSessionId.slice(0, 12)} promptLen=${prompt.length} refFiles=${refFileIds.length}`,
+      );
+
+      for await (const line of client.streamCompletionLines(token, powResponse, payload, signal)) {
+        if (signal?.aborted) break;
+        const raw = line.slice(5).trim();
+        if (!raw) continue;
+        if (raw.indexOf('FINISHED') >= 0 && raw.indexOf('response/status') >= 0) break;
+        try {
+          const chunk = JSON.parse(raw);
+          const result = parseContent(chunk, currentFragmentType);
+          if (result) {
+            currentFragmentType = result.nextType;
+            text += result.content;
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      console.log(`[VISION] temp summary chars=${text.length}`);
+      return text.trim();
+    } finally {
+      try {
+        await client.deleteSession(token, tempSessionId);
+        console.log(`[VISION] deleted temp session=${tempSessionId.slice(0, 12)}`);
+      } catch (err) {
+        console.warn(`[VISION] failed to delete temp session=${tempSessionId.slice(0, 12)}: ${(err as Error).message}`);
+      }
+    }
+  }
+
   private async buildPromptAndFiles(
     token: string,
     sessionId: string,
@@ -479,6 +722,11 @@ class DeepSeekProvider implements Provider {
     // Upload images first
     const imageRefs = extractImageRefs(messages as Array<{ role: string; content: unknown }>);
     const imageFileIds = imageRefs.length > 0 ? await uploadImageRefs(token, imageRefs) : [];
+    const unsupportedImageErrors = countUnsupportedImageErrors(messages);
+    console.log(
+      `[DEEPSEEK] media: modelType=${getModelType(request.providerModel || request.model)} imageRefs=${imageRefs.length} ` +
+        `uploadedImages=${imageFileIds.length} unsupportedImageErrors=${unsupportedImageErrors}`,
+    );
 
     // Capture before sentSystemPrompt is mutated below
     // isRestoredSession: DB restore sau restart — session đã có history, không phải conversation mới
@@ -522,16 +770,8 @@ class DeepSeekProvider implements Provider {
     // (chat_session_id + parent_message_id), so the server already knows what the assistant said.
     const messageXml = messages
       .filter((m) => isNewConversation || m.role !== 'assistant')
-      .map((m) => {
-        const text = messageContent(m as any);
-        if (m.role === 'tool') {
-          const toolCallId = (m as any).tool_call_id;
-          const body = toolCallId ? `tool_call_id: ${toolCallId}\n${text}` : text;
-          return block('tool', body);
-        }
-        return block('user', text);
-      })
-      .join('\n\n');
+      .map((m) => renderMessageBlock(m as InternalMessage))
+      .join('\n');
 
     const t0 = Date.now();
     let prompt: string;
@@ -553,29 +793,13 @@ class DeepSeekProvider implements Provider {
         // message cuối cùng nằm trong prompt inline (tránh duplicate).
         const lastMsg = messages[messages.length - 1];
         const historyMsgs = messages.slice(0, -1);
-        fileContent = historyMsgs
-          .map((m) => {
-            const text = messageContent(m as any);
-            if (m.role === 'tool') {
-              const toolCallId = (m as any).tool_call_id;
-              const body = toolCallId ? `tool_call_id: ${toolCallId}\n${text}` : text;
-              return block('tool', body);
-            }
-            return block('user', text);
-          })
-          .join('\n\n') || '(empty history)';
-        const lastText = messageContent(lastMsg as any);
-        if (lastMsg.role === 'tool') {
-          const toolCallId = (lastMsg as any).tool_call_id;
-          const body = toolCallId ? `tool_call_id: ${toolCallId}\n${lastText}` : lastText;
-          inlineXml = block('tool', body);
-        } else {
-          inlineXml = block('user', lastText);
-        }
+        fileContent = historyMsgs.map((m) => renderMessageBlock(m as InternalMessage)).join('\n') || '(empty history)';
+        inlineXml = renderMessageBlock(lastMsg as InternalMessage);
       } else {
         // Có cache: API đã có history stateful. Không cần gửi lại context cũ.
         // Tất cả message trong request đều là message mới → nằm trong prompt inline.
-        fileContent = '(Previous context is maintained by the chat session. See inline messages below for the current request.)';
+        fileContent =
+          '(Previous context is maintained by the chat session. See inline messages below for the current request.)';
         inlineXml = messageXml;
       }
 
@@ -626,6 +850,81 @@ function extractImageRefs(messages: Array<{ role: string; content: unknown }>): 
   return refs;
 }
 
+function hasImageMessage(msg: InternalMessage): boolean {
+  return Array.isArray(msg.content) && msg.content.some((block) => block.type === 'image_url' && !!block.image_url.url);
+}
+
+function countImageBlocks(msg: InternalMessage): number {
+  if (!Array.isArray(msg.content)) return 0;
+  return msg.content.filter((block) => block.type === 'image_url' && !!block.image_url.url).length;
+}
+
+function buildVisionPrompt(request: InternalRequest): string {
+  const messages = request.messages.map((msg) => renderMessageBlock(msg)).join('\n');
+  return [block('system', VISION_SYSTEM_PROMPT), messages].join('\n\n');
+}
+
+function rewriteMessagesWithVisionHandoffs(messages: InternalMessage[], summaries: ImageSummary[]): InternalMessage[] {
+  const rewritten: InternalMessage[] = [];
+  const summaryByHash = new Map(summaries.map((item) => [item.messageHash, item.summary]));
+  const insertedHashes = new Set<string>();
+
+  for (const msg of messages) {
+    const messageHash = hashMessage(msg);
+    const summary = summaryByHash.get(messageHash);
+    if (summary && !insertedHashes.has(messageHash)) {
+      rewritten.push({
+        role: 'system',
+        content:
+          'Vì bạn không có tính năng vision, nên tôi đã dùng một model vision khác để phân tích yêu cầu người dùng và có được kết luận như sau. Hãy tiếp tục xử lý yêu cầu của user dựa trên kết luận này:\n\n' +
+          `<vision_result>\n${summary.trim()}\n</vision_result>`,
+      });
+      insertedHashes.add(messageHash);
+    }
+
+    rewritten.push(stripImageContent(msg));
+  }
+
+  return rewritten;
+}
+
+function stripImageContent(msg: InternalMessage): InternalMessage {
+  if (!Array.isArray(msg.content)) return msg;
+  const text = msg.content
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text)
+    .join('');
+  const suffix = hasImageMessage(msg) ? '\n\n[image đã được phân tích trong system message phía trên]' : '';
+  return { ...msg, content: text + suffix };
+}
+
+function renderMessageBlock(msg: InternalMessage): string {
+  const text = messageContent(msg as any);
+  if (msg.role === 'tool') {
+    return toolBlock(msg.tool_call_id || 'unknown', text);
+  }
+  if (msg.role === 'system') {
+    return block('system', text);
+  }
+  if (msg.role === 'assistant') {
+    return block('assistant', text);
+  }
+  return block('user', text);
+}
+
+function countUnsupportedImageErrors(messages: InternalRequest['messages']): number {
+  let count = 0;
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block.type === 'text' && block.text.includes('model does not support image input')) {
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
 async function uploadImageRefs(token: string, refs: ImageRef[]): Promise<string[]> {
   const fileIds: string[] = [];
   for (let i = 0; i < refs.length; i++) {
@@ -656,9 +955,9 @@ async function uploadImageRefs(token: string, refs: ImageRef[]): Promise<string[
 
       const filename = `image_${Date.now()}_${i}.${ext}`;
       console.log(`[IMAGE] Uploading ${filename} (${data.length} bytes, ${mimeType})`);
-      const result = await client.uploadFile(token, filename, data, mimeType);
+      const result = await client.uploadImageFile(token, filename, data, mimeType);
       fileIds.push(result.id);
-      await client.pollFileReady(token, result.id);
+      await client.pollFileReady(token, result.id, { webHeaders: mimeType.toLowerCase().startsWith('image/') });
       console.log(`[IMAGE] Uploaded ${filename} -> ${result.id}`);
     } catch (err) {
       console.error(`[IMAGE] Error uploading image ${i}:`, (err as Error).message);
@@ -678,6 +977,38 @@ function messageContent(msg: {
       return '';
     })
     .join('');
+}
+
+function buildEditMessagePrompt(request: InternalRequest): string {
+  const lastTrackedIndex = findLastTrackedMessageIndex(request.messages);
+  if (lastTrackedIndex < 0) return '';
+
+  const lastTracked = request.messages[lastTrackedIndex];
+  if (lastTracked.role === 'tool') {
+    let firstToolIndex = lastTrackedIndex;
+    while (firstToolIndex > 0 && request.messages[firstToolIndex - 1].role === 'tool') {
+      firstToolIndex--;
+    }
+
+    const toolBlocks = request.messages
+      .slice(firstToolIndex, lastTrackedIndex + 1)
+      .map((m) => {
+        const toolCallId = m.tool_call_id || 'unknown';
+        return toolBlock(toolCallId, messageContent(m as any));
+      })
+      .join('\n');
+
+    return toolBlocks;
+  }
+
+  return messageContent(lastTracked as any);
+}
+
+function findLastTrackedMessageIndex(messages: InternalRequest['messages']): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user' || messages[i].role === 'tool') return i;
+  }
+  return -1;
 }
 
 interface ParsedResult {
@@ -791,30 +1122,6 @@ function extractTextValue(v: unknown): string {
     return (obj.text as string) || (obj.content as string) || '';
   }
   return '';
-}
-
-function buildToolCallDeltas(toolCalls: ParsedToolCall[], streamId: string): ToolCallDelta[] {
-  const deltas: ToolCallDelta[] = [];
-  for (let i = 0; i < toolCalls.length; i++) {
-    const tc = toolCalls[i];
-    const callId = tc.id || `call_${streamId}_${i}_${tc.name}`;
-
-    // First delta: index, id, type, function.name
-    deltas.push({
-      index: i,
-      id: callId,
-      type: 'function',
-      function: { name: tc.name, arguments: '' },
-    });
-
-    // Arguments delta: the full JSON string
-    const argsJson = JSON.stringify(tc.arguments);
-    deltas.push({
-      index: i,
-      function: { arguments: argsJson },
-    });
-  }
-  return deltas;
 }
 
 export const deepseekProvider: Provider = new DeepSeekProvider();

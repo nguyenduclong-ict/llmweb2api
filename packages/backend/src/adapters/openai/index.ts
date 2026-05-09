@@ -42,6 +42,24 @@ function extractContent(message: any): string | ContentBlock[] {
   return '';
 }
 
+function countImageBlocks(messages: InternalMessage[]): number {
+  return messages.reduce((sum, msg) => {
+    if (!Array.isArray(msg.content)) return sum;
+    return sum + msg.content.filter((part) => part.type === 'image_url' && !!part.image_url.url).length;
+  }, 0);
+}
+
+function countUnsupportedImageErrors(messages: InternalMessage[]): number {
+  return messages.reduce((sum, msg) => {
+    if (!Array.isArray(msg.content)) return sum;
+    return (
+      sum +
+      msg.content.filter((part) => part.type === 'text' && part.text.includes('model does not support image input'))
+        .length
+    );
+  }, 0);
+}
+
 export const openaiAdapter: Adapter = {
   name: 'openai',
 
@@ -76,7 +94,11 @@ export const openaiAdapter: Adapter = {
         `[ADAPTER] Detected conversationId=${conversationId} from ${body.conversation_id ? 'body' : 'message field'}`,
       );
     }
-    console.log(`[ADAPTER] request: convId=${conversationId || '<none>'} stream=${body.stream} tools=${body.tools ? body.tools.length : 0} msgs=${messages.length}`);
+    console.log(
+      `[ADAPTER] request: convId=${conversationId || '<none>'} stream=${body.stream} ` +
+        `tools=${body.tools ? body.tools.length : 0} msgs=${messages.length} ` +
+        `images=${countImageBlocks(messages)} unsupportedImageErrors=${countUnsupportedImageErrors(messages)}`,
+    );
 
     return {
       model: resolved.responseModel,

@@ -4,6 +4,8 @@ import type { InternalMessage } from '../../types/common';
 export interface MessageHashEntry {
   parent_message_id: number | null;
   request_message_id: number;
+  image_summary?: string;
+  image_count?: number;
 }
 
 export type HashCacheMap = Record<string, MessageHashEntry>;
@@ -11,9 +13,19 @@ export type HashCacheMap = Record<string, MessageHashEntry>;
 const TRACKED_ROLES = new Set(['user', 'tool']);
 
 export function hashMessage(msg: InternalMessage): string {
-  const normalized =
-    msg.role + ':' + (typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content));
+  const normalized = msg.role + ':' + hashableContent(msg);
   return crypto.createHash('md5').update(normalized).digest('hex');
+}
+
+function hashableContent(msg: InternalMessage): string {
+  if (typeof msg.content === 'string') return msg.content;
+  if (msg.role === 'user') {
+    return msg.content
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('');
+  }
+  return JSON.stringify(msg.content);
 }
 
 export function filterTrackedMessages(messages: InternalMessage[]): InternalMessage[] {

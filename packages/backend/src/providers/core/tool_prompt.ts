@@ -11,220 +11,180 @@ function filterValidTools(tools: ToolDef[]): ToolDef[] {
   return tools.filter((t) => t?.type === 'function' && t?.function?.name);
 }
 
-export const YAML_SYNTAX = `
-═══ YAML SYNTAX CHO TOOL_CALL ═══
+export const TOOL_CALL_SYNTAX = `
+═══════════════════════════════════════════
+TOOL_CALL SYNTAX (marker [#l2a:...])
+═══════════════════════════════════════════
 
-Nội dung của [#llmweb2api:tool_call] là YAML thuần túy (KHÔNG bọc trong \`\`\`yaml hay \`\`\`).
+Tool call dùng marker [#l2a:parameter:X] cho từng field.
 
-Cấu trúc cơ bản:
+CẤU TRÚC CƠ BẢN:
 
-id: call_1_tên_công_cụ  (ID duy nhất, format: call_<số_thứ_tự>_<tên_công_cụ>, VD: call_1_read, call_2_write)
-name: tên_công_cụ
-arguments:
-  key1: value1
-  key2: |
-    multi-line value dòng 1
-    multi-line value dòng 2
-
-───────────────────────────────────────
-LUẬT SỐ 1 — Single-line vs Multi-line
-───────────────────────────────────────
-
-Single-line value (KHÔNG chứa ký tự : { } [ ] # & * |, độ dài < 80 ký tự):
-  key: value
-  count: 5
-  filePath: C:\\Users\\test.ts
-
-Multi-line value (CÓ newline HOẶC chứa ký tự đặc biệt HOẶC dài > 80 ký tự):
-  PHẢI dùng literal block scalar (|):
-
-  prompt: |
-    Đây là dòng 1
-    Đây là dòng 2
-
-SAI — quên dùng | cho multi-line:
-  description: This is line 1
-  This is line 2              ← LỖI PARSE
-
-SAI — dùng | nhưng nội dung không thụt lề:
-  code: |
-  import { foo } from "bar";   ← LỖI PARSE (không thụt lề)
+[#l2a:tool_call]
+[#l2a:parameter:id]
+call_1_tên_công_cụ
+[/l2a:parameter:id]
+[#l2a:parameter:name]
+tên_công_cụ
+[/l2a:parameter:name]
+[#l2a:parameter:arguments]
+{"key1":"value1","key2":"value2"}
+[/l2a:parameter:arguments]
+[/l2a:tool_call]
 
 ───────────────────────────────────────
-LUẬT SỐ 2 — Indentation (2 spaces)
+LUẬT SỐ 0 — Marker ở đầu dòng
 ───────────────────────────────────────
 
-Mọi indentation PHẢI chính xác 2 spaces. Không dùng tab. Không dùng 4 spaces.
+Mỗi marker [#l2a:...] và [/l2a:...] PHẢI nằm ở đầu dòng (column 0). Không thụt lề.
+Mỗi marker PHẢI nằm TRÊN MỘT DÒNG RIÊNG BIỆT.
+Không đặt text khác trên cùng dòng với marker.
 
 ĐÚNG:
-id: call_1_read
-name: read
-arguments:
-  filePath: C:\\test.ts
-  prompt: |
-    Nội dung dòng 1
-    Nội dung dòng 2
+[#l2a:parameter:name]
+read
+[/l2a:parameter:name]
 
-SAI (4 spaces):
-id: call_1_read
-name: read
-arguments:
-    filePath: C:\\test.ts    ← 4 spaces, LỖI PARSE
+SAI (text nằm cùng dòng với marker):
+[#l2a:parameter:name] read [/l2a:parameter:name]
 
 ───────────────────────────────────────
-LUẬT SỐ 3 — Dấu | (literal block scalar)
+LUẬT SỐ 1 — Thứ tự parameter
 ───────────────────────────────────────
 
-- Sau dấu | PHẢI xuống dòng ngay lập tức.
-- Nội dung sau | PHẢI thụt vào 2 spaces (hoặc hơn).
-- KHÔNG đặt text sau | trên cùng một dòng.
-
-ĐÚNG:
-  old_string: |
-    import { useState } from "react";
-    const x = 1;
-
-SAI (text trên cùng dòng với |):
-  old_string: | import { useState } from "react";   ← LỖI
+Bên trong [#l2a:tool_call], các parameter PHẢI theo thứ tự:
+  1. [#l2a:parameter:id] — ID của tool call (bắt buộc)
+  2. [#l2a:parameter:name] — Tên function (bắt buộc)
+  3. [#l2a:parameter:arguments] — JSON arguments (bắt buộc)
 
 ───────────────────────────────────────
-LUẬT SỐ 4 — Double-quoted strings
+LUẬT SỐ 2 — ID format
 ───────────────────────────────────────
 
-Chỉ dùng "" khi giá trị chứa các ký tự đặc biệt của YAML: dấu : # { } [ ] , & * ? | - < > = ! % @ \`
-
-Windows path LUÔN bọc trong "":
-  filePath: "C:\\Users\\ADMIN\\Desktop\\file.tsx"
-
-Single-line text có dấu : bọc trong "":
-  description: "Tìm kiếm: tất cả file .ts"
-
-Multi-line text → dùng |, KHÔNG cần "":
-  prompt: |
-    Tìm kiếm: tất cả file .ts
-    Thư mục: src/providers
-
-───────────────────────────────────────
-LUẬT SỐ 5 — Numbers và Booleans
-───────────────────────────────────────
-
-TUYỆT ĐỐI KHÔNG bọc numbers và booleans trong quotes.
-
-ĐÚNG:
-  maxTokens: 32000
-  stream: true
-
-SAI:
-  maxTokens: "32000"     ← đây là string, không phải number
-  stream: "true"         ← đây là string, không phải boolean
-
-───────────────────────────────────────
-LUẬT SỐ 6 — Arrays
-───────────────────────────────────────
-
-ĐÚNG:
-  tags:
-    - react
-    - typescript
-
-  items:
-    - name: item1
-      value: 10
-    - name: item2
-      value: 20
-
-───────────────────────────────────────
-LUẬT SỐ 7 — KHÔNG có markdown fence
-───────────────────────────────────────
-
-Nội dung tool_call là YAML thuần túy. KHÔNG bọc trong \`\`\`yaml hay \`\`\`.
-
-ĐÚNG:
-[#llmweb2api:tool_call]
-
-id: call_1_read
-name: read
-arguments:
-  filePath: "C:\\test.ts"
-
-[$llmweb2api:tool_call]
-
-SAI:
-[#llmweb2api:tool_call]
-\`\`\`yaml
-name: read
-\`\`\`
-[$llmweb2api:tool_call]
-
-───────────────────────────────────────
-LUẬT SỐ 8 — Tool name phải khớp chính xác
-───────────────────────────────────────
-
-Tên trong name: phải khớp CHÍNH XÁC với tên function trong [#llmweb2api:tools],
-bao gồm cả chữ hoa/thường và dấu gạch dưới.
-
-───────────────────────────────────────
-LUẬT SỐ 9 — ID tool call (QUAN TRỌNG)
-───────────────────────────────────────
-
-MỖI tool call PHẢI có trường id với format: call_<số_thứ_tự>_<tên_công_cụ>
-
+ID phải có format: call_<số_thứ_tự>_<tên_công_cụ>
 - Số thứ tự bắt đầu từ 1, tăng dần cho mỗi tool call trong cùng 1 response.
-- Tên công cụ phải khớp chính xác với name: bên dưới.
 - Ví dụ: call_1_read, call_2_write, call_3_search
 
 Nếu có 3 tool calls trong 1 response:
-  Tool call thứ 1: id: call_1_<name1>
-  Tool call thứ 2: id: call_2_<name2>
-  Tool call thứ 3: id: call_3_<name3>
+  Tool call thứ 1: call_1_<name1>
+  Tool call thứ 2: call_2_<name2>
+  Tool call thứ 3: call_3_<name3>
+
+───────────────────────────────────────
+LUẬT SỐ 3 — arguments là JSON-encoded string
+───────────────────────────────────────
+
+Nội dung trong [#l2a:parameter:arguments] PHẢI là JSON object dạng string (JSON-encoded).
+ĐÚNG:
+[#l2a:parameter:arguments]
+{"filePath":"C:\\test.ts","prompt":"hello"}
+[/l2a:parameter:arguments]
+
+SAI (không phải JSON):
+[#l2a:parameter:arguments]
+filePath: test.ts
+[/l2a:parameter:arguments]
+
+───────────────────────────────────────
+LUẬT SỐ 4 — Tool name khớp chính xác
+───────────────────────────────────────
+
+Tên trong [#l2a:parameter:name] phải khớp CHÍNH XÁC với tên function
+trong [#l2a:tools], bao gồm cả chữ hoa/thường và dấu gạch dưới.
+
+───────────────────────────────────────
+LUẬT SỐ 5 — KHÔNG thêm text ngoài marker
+───────────────────────────────────────
+
+Giữa các marker chỉ có khoảng trắng hoặc xuống dòng.
+KHÔNG thêm text ngoài marker. Marker mở và đóng phải đầy đủ.
+
+ĐÚNG:
+[#l2a:tool_call]
+[#l2a:parameter:id]
+call_1_read
+[/l2a:parameter:id]
+[#l2a:parameter:name]
+read
+[/l2a:parameter:name]
+[#l2a:parameter:arguments]
+{"filePath":"C:\\test.ts"}
+[/l2a:parameter:arguments]
+[/l2a:tool_call]
+
+SAI (thêm text ngoài marker):
+[#l2a:tool_call]
+Bây giờ tôi sẽ gọi tool read
+[#l2a:parameter:name]
+read
+[/l2a:parameter:name]
+...
+
+───────────────────────────────────────
+LUẬT SỐ 6 — Nhiều tool call trong 1 response
+───────────────────────────────────────
+
+Mỗi tool call là 1 khối [#l2a:tool_call] riêng biệt.
+Các khối cách nhau bằng 1 dòng trống.
+
+[#l2a:tool_call]
+[#l2a:parameter:id]
+call_1_read
+[/l2a:parameter:id]
+[#l2a:parameter:name]
+read
+[/l2a:parameter:name]
+[#l2a:parameter:arguments]
+{...}
+[/l2a:parameter:arguments]
+[/l2a:tool_call]
+
+[#l2a:tool_call]
+[#l2a:parameter:id]
+call_2_write
+[/l2a:parameter:id]
+[#l2a:parameter:name]
+write
+[/l2a:parameter:name]
+[#l2a:parameter:arguments]
+{...}
+[/l2a:parameter:arguments]
+[/l2a:tool_call]
 
 ───────────────────────────────────────
 CHECKLIST TRƯỚC KHI GỬI TOOL_CALL
 ───────────────────────────────────────
 
-Trước khi đóng [$llmweb2api:tool_call], kiểm tra:
-1. đã có id với format call_<số>_<tên> chưa?
-2. value nào có newline hoặc dài > 80 chars → đã dùng | chưa?
-3. indentation có đúng 2 spaces không?
-4. Windows path đã bọc trong "" chưa?
-5. numbers/booleans có bị bọc trong "" không?
-6. có vô tình bọc nội dung trong \`\`\` không?
-7. sau dấu | đã xuống dòng chưa?
-8. nội dung sau | đã thụt lề đúng chưa?
-9. có đủ [$llmweb2api:tool_call] đóng block chưa?
-10. tên function trong name: có khớp chính xác không?
+Trước khi đóng [/l2a:tool_call], kiểm tra:
+1. Marker có nằm ở đầu dòng không?
+2. Đã có đủ 3 parameter: id, name, arguments chưa?
+3. ID có format call_<số>_<tên> không?
+4. Arguments có phải JSON-encoded string không?
+5. Marker mở/đóng có đầy đủ không?
+6. Tên function trong name có khớp chính xác không?
 `;
 
-export const TOOL_SYSTEM_PROMPT = `Bạn sẽ làm việc với tôi thông qua một dạng dữ liệu gọi là "llmweb2api xml".
-Đây là một định dạng đặc biệt cho phép bạn gọi các công cụ (tools) mà tôi cung cấp.
-Dưới đây là hướng dẫn chi tiết về cách sử dụng định dạng này để gọi công cụ một cách chính xác và hiệu quả.
+export const TOOL_SYSTEM_PROMPT = `Bạn giao tiếp với hệ thống qua định dạng marker #l2a.
+Đây là format cho phép bạn gọi công cụ (tools) mà hệ thống cung cấp.
 
-syntax:
+SYNTAX:
 
-- Khối: Bắt dầu bằng \n[#llmweb2api:<tên khối>]\n\nvà kết thúc bằng\n\n[$llmweb2api:<tên khối>]\n
-- Nội dung trong khối luôn đặt ở giữa, cách block tags bằng 2 dòng trống. ví dụ:
+- Mỗi khối bắt đầu bằng [#l2a:<role>] và kết thúc bằng [/l2a:<role>].
+- Marker PHẢI nằm ở đầu dòng (column 0).
+- Nội dung nằm giữa marker mở và marker đóng.
+- Ví dụ tin nhắn user:
 
-[#llmweb2api:tool_call]
+[#l2a:user]Xin chào, hãy đọc file test.ts[/l2a:user]
 
-id: call_1_my_tool
-name: my_tool
-arguments:
-  key: value
+- Khi bạn trả lời bằng text thông thường, hãy trả lời trực tiếp KHÔNG dùng marker [#l2a:...].
+- Chỉ sử dụng marker [#l2a:tool_call] khi bạn cần gọi công cụ.
 
-[$llmweb2api:tool_call]
+CÁC LOẠI MARKER:
 
-- Mỗi khối có một tên duy nhất và có ý nghĩa riêng
-- Khi mởi một khối, bắt buộc phải có khối đóng tương ứng, ngay cả khi nội dung giữa chúng rỗng hoặc không hợp lệ (để tránh lỗi phân tích cú pháp).
-- Nội dung giữa các khối sẽ được phân tích và xử lý theo quy tắc riêng của từng loại khối.
-- Giữ các khối phải cách bi nhau bằng ít nhất một dòng trống để đảm bảo rằng chúng được nhận diện đúng cách.
-- Khi bạn trả lời tôi, nếu chỉ muốn cung cấp nội dung text thông thường, hãy trả lời trực tiếp mà không cần sử dụng khối. Chỉ sử dụng khối khi bạn cần gọi công cụ hoặc cung cấp thông tin đặc biệt theo hướng dẫn dưới đây.
-
-Các loại khối và chi tiết của chúng:
-
-1. [#llmweb2api:system] ... [$llmweb2api:system]: Khối này chứa các message system tương tự như message role='system' trong chuẩn openai.
-2. [#llmweb2api:user] ... [$llmweb2api:user]: Khối này chứa các message user tương tự như message role='user' trong chuẩn openai.
-3. [#llmweb2api:assistant] ... [$llmweb2api:assistant]: Khối này chứa các message assistant mà hệ thống gửi đến bạn (lịch sử hội thoại). Bạn KHÔNG ĐƯỢC tự tạo khối này trong câu trả lời của mình. Khi trả lời, hãy dùng text trực tiếp, không bọc trong bất kỳ khối nào.
-4. [#llmweb2api:tools] ... [$llmweb2api:tools]: Khối này chứa định nghĩa các công cụ (tools) mà bạn có thể gọi. Nội dung của khối này sẽ là mảng các đối tượng JSON với cấu trúc như sau:
+1. [#l2a:system]...[/l2a:system]: System message (do hệ thống tạo).
+2. [#l2a:user]...[/l2a:user]: User message.
+3. [#l2a:assistant]...[/l2a:assistant]: Assistant history. Bạn KHÔNG ĐƯỢC tự tạo marker này.
+4. [#l2a:tools][...][/l2a:tools]: Định nghĩa tools dạng JSON array:
 
 [
   {
@@ -232,37 +192,38 @@ Các loại khối và chi tiết của chúng:
     "function": {
       "name": "tên_công_cụ",
       "description": "mô_tả_công_cụ",
-      "parameters": {
-        // định nghĩa tham số công cụ (tùy chọn)
-      }
+      "parameters": { }
     }
-  },
-  // có thể có nhiều công cụ khác nhau
+  }
 ]
 
-5. [#llmweb2api:tool_call] ... [$llmweb2api:tool_call]: Khối này chứa các cuộc gọi công cụ (tool calls) mà bạn thực hiện. Nội dung của khối này là 1 đối tượng YAML với cấu trúc id + name + arguments. Xem YAML_SYNTAX ở cuối prompt này để biết chi tiết cách viết YAML đúng cú pháp.
+5. [#l2a:tool_call]...[/l2a:tool_call]: Tool call bạn thực hiện. Bên trong chứa 3 parameter,
+   MỖI MARKER NẰM TRÊN DÒNG RIÊNG:
+   - [#l2a:parameter:id]
+     call_1_xxx
+     [/l2a:parameter:id]
+   - [#l2a:parameter:name]
+     tên_công_cụ
+     [/l2a:parameter:name]
+   - [#l2a:parameter:arguments]
+     {"key":"value"}
+     [/l2a:parameter:arguments]
+   Xem TOOL_CALL_SYNTAX ở cuối prompt này để biết chi tiết.
 
-6. [#llmweb2api:tool] ... [$llmweb2api:tool]: Khối này chứa kết quả thực thi của công cụ (tool results). Đây là khối do hệ thống tự động tạo ra để thông báo kết quả cho bạn. Bạn không cần và không được tự tạo khối này. Dòng đầu tiên trong khối là tool_call_id cho biết kết quả này tương ứng với tool call nào. Nội dung còn lại là kết quả trả về từ công cụ mà bạn đã gọi.
-
+6. [#l2a:tool:call_1_xxx]...[/l2a:tool:call_1_xxx]: Kết quả tool (do hệ thống tạo).
+   Phần sau "tool:" là tool_call_id tương ứng.
 
 QUAN TRỌNG:
 
-- Các khối bạn có thể sử dụng để trả lời tôi (quan trọng, bạn chỉ có thể sử dụng các khối này khi trả lời, KHÔNG ĐƯỢC tự tạo các khối khác):
-  - [#llmweb2api:tool_call]
-  - [#llmweb2api:assistant]: Tuy nhiên, bạn **KHÔNG ĐƯỢC** tự tạo khối này. Khi trả lời bằng text, hãy dùng text trực tiếp, không bọc trong bất kỳ khối nào.
+- Marker bạn có thể sử dụng khi trả lời:
+  - [#l2a:tool_call]...[/l2a:tool_call] (để gọi công cụ)
 
-- Các khối client có thể sử dụng:
-  - [#llmweb2api:system]
-  - [#llmweb2api:user]
-  - [#llmweb2api:assistant]
-  - [#llmweb2api:tools]
+- Bạn KHÔNG ĐƯỢC tự tạo: [#l2a:assistant], [#l2a:system], [#l2a:tools], [#l2a:tool:...]
 
-- Tuyệt đối không được tự tạo các khối không được liệt kê ở trên
-- Các khối không hợp lệ, ví dụ:
-  - [$llmweb2api:todowrite]
+- Khi trả lời bằng text, hãy dùng text trực tiếp, không bọc trong marker [#l2a:...].
 
 ==========================
-${YAML_SYNTAX}`;
+${TOOL_CALL_SYNTAX}`;
 
 export function buildToolPrompt(tools: ToolDef[]): string {
   const valid = filterValidTools(tools);
@@ -272,17 +233,50 @@ export function buildToolPrompt(tools: ToolDef[]): string {
 
 export type BlockName = 'user' | 'system' | 'assistant' | 'tools' | 'tool_call' | 'tool';
 
-export function block(name: BlockName, content: string) {
-  return `[#llmweb2api:${name}]\n\n${content}\n\n[$llmweb2api:${name}]`;
+export function block(name: BlockName, content: string): string {
+  return `[#l2a:${name}]\n${content}\n[/l2a:${name}]`;
+}
+
+export function toolBlock(toolCallId: string, content: string): string {
+  return `[#l2a:tool:${toolCallId}]\n${content}\n[/l2a:tool:${toolCallId}]`;
+}
+
+export function unwrapBlockContent(content: string): string {
+  let result = content;
+  if (result.startsWith('\r\n')) {
+    result = result.slice(2);
+  } else if (result.startsWith('\n')) {
+    result = result.slice(1);
+  }
+
+  if (result.endsWith('\r\n')) {
+    result = result.slice(0, -2);
+  } else if (result.endsWith('\n')) {
+    result = result.slice(0, -1);
+  }
+
+  return result;
 }
 
 export function getBlockContent(name: BlockName, text: string): string | null {
-  const startMarker = `[#llmweb2api:${name}]`;
-  const endMarker = `[$llmweb2api:${name}]`;
-  const startIdx = text.indexOf(startMarker);
+  let startTag: string;
+  let endTag: string;
+
+  if (name === 'tool') {
+    const re = /\[#l2a:tool:([^\]]+)\]/;
+    const m = text.match(re);
+    if (!m) return null;
+    startTag = m[0];
+    endTag = `[/l2a:tool:${m[1]}]`;
+  } else {
+    startTag = `[#l2a:${name}]`;
+    endTag = `[/l2a:${name}]`;
+  }
+
+  const startIdx = text.indexOf(startTag);
   if (startIdx < 0) return null;
-  const contentStart = startIdx + startMarker.length;
-  const endIdx = text.indexOf(endMarker, contentStart);
+  const contentStart = startIdx + startTag.length;
+  const endIdx = text.indexOf(endTag, contentStart);
   if (endIdx < 0) return null;
-  return text.slice(contentStart, endIdx).trim();
+  return unwrapBlockContent(text.slice(contentStart, endIdx));
 }

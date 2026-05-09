@@ -11,7 +11,9 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
-    "build-pow": "node scripts/build_pow_go.js"
+    "build-pow": "node scripts/build_pow_go.js",
+    "test:temporary-vision": "tsx scripts/test_temporary_vision.ts",
+    "test:delete-conversation": "tsx scripts/test_delete_conversation.ts"
   },
   "dependencies": {
     "@types/sql.js": "^1.4.11",

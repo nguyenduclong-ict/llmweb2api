@@ -12,6 +12,31 @@ function authHeaders(token: string): Record<string, string> {
   return { ...BASE_HEADERS, authorization: `Bearer ${token}` };
 }
 
+function webAuthHeaders(token: string): Record<string, string> {
+  return {
+    ...authHeaders(token),
+    Accept: '*/*',
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+    Referer: 'https://chat.deepseek.com/',
+    'x-app-version': '2.0.0',
+    'x-client-locale': 'vi',
+    'x-client-platform': 'web',
+    'x-client-timezone-offset': '25200',
+    'x-client-version': '2.0.0',
+  };
+}
+
+interface UploadFileOptions {
+  modelType?: string;
+  thinkingEnabled?: boolean;
+  webHeaders?: boolean;
+}
+
+function isImageContentType(contentType: string): boolean {
+  return contentType.toLowerCase().startsWith('image/');
+}
+
 export async function login(email: string, password: string): Promise<string> {
   const body = { email, password, device_id: 'deepseek_to_api', os: 'android' };
 
@@ -400,9 +425,10 @@ export async function* streamCompletionLines(
   powResponse: string,
   payload: DeepSeekCompletionPayload,
   signal?: AbortSignal,
+  options: { webHeaders?: boolean } = {},
 ): AsyncGenerator<string> {
   const headers = {
-    ...authHeaders(token),
+    ...(options.webHeaders ? webAuthHeaders(token) : authHeaders(token)),
     'x-ds-pow-response': powResponse,
   };
 
@@ -543,13 +569,14 @@ export async function uploadFile(
   filename: string,
   content: string | Uint8Array,
   contentType: string = 'text/plain',
+  options: UploadFileOptions = {},
 ): Promise<DeepSeekUploadResult> {
   const data = typeof content === 'string' ? Buffer.from(content, 'utf-8') : Buffer.from(content);
 
   if (data.length > MAX_FILE_SIZE) throw new Error(`File too large: ${data.length} bytes (max ${MAX_FILE_SIZE})`);
 
   const powResponse = await getPowForTarget(token, DEEPSEEK_URLS.uploadTarget);
-  const boundary = `----FormBoundary${Date.now().toString(36)}`;
+  const boundary = `----WebKitFormBoundary${Date.now().toString(36)}`;
 
   const lines: string[] = [];
   lines.push(`--${boundary}`);
@@ -561,12 +588,13 @@ export async function uploadFile(
   const body = Buffer.concat([headBytes, data, tailBytes]);
 
   const headers: Record<string, string> = {
-    ...authHeaders(token),
+    ...(options.webHeaders ? webAuthHeaders(token) : authHeaders(token)),
     'Content-Type': `multipart/form-data; boundary=${boundary}`,
     'x-ds-pow-response': powResponse,
     'x-file-size': String(data.length),
-    'x-thinking-enabled': '1',
+    'x-thinking-enabled': options.thinkingEnabled === false ? '0' : '1',
   };
+  if (options.modelType) headers['x-model-type'] = options.modelType;
 
   const resp = await fetch(DEEPSEEK_URLS.uploadFile, {
     method: 'POST',
@@ -593,14 +621,30 @@ export async function uploadFile(
   return result;
 }
 
-export async function pollFileReady(token: string, fileId: string): Promise<void> {
+export async function uploadImageFile(
+  token: string,
+  filename: string,
+  content: Uint8Array,
+  contentType: string,
+): Promise<DeepSeekUploadResult> {
+  const options: UploadFileOptions = isImageContentType(contentType)
+    ? { modelType: 'vision', thinkingEnabled: false, webHeaders: true }
+    : {};
+  return uploadFile(token, filename, content, contentType, options);
+}
+
+export async function pollFileReady(
+  token: string,
+  fileId: string,
+  options: { webHeaders?: boolean } = {},
+): Promise<void> {
   const maxAttempts = 10;
   const interval = 2000;
 
   for (let i = 0; i < maxAttempts; i++) {
     await sleep(interval);
     const url = `${DEEPSEEK_URLS.fetchFiles}?file_ids=${encodeURIComponent(fileId)}`;
-    const resp = await fetch(url, { headers: authHeaders(token) });
+    const resp = await fetch(url, { headers: options.webHeaders ? webAuthHeaders(token) : authHeaders(token) });
 
     if (resp.status === 200) {
       const data = (await resp.json()) as any;
@@ -622,6 +666,9 @@ export async function pollFileReady(token: string, fileId: string): Promise<void
           ].includes(status)
         ) {
           return;
+        }
+        if (['CONTENT_EMPTY', 'PARSE_FAILED', 'FAILED', 'ERROR'].includes(status)) {
+          throw new Error(`File parse failed: ${fileId} status=${status}`);
         }
       }
     }

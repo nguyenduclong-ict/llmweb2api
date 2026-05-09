@@ -10,6 +10,14 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   prettierConfig,
   {
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+  {
     plugins: {
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,

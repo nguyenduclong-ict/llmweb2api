@@ -365,25 +365,18 @@ console.log('\n========== Full stream simulation ==========');
   if (r) {
     assertEq(r.content, 'response part', 'Combined batch: content = response');
     assertEq(r.reasoningContent, 'thinking part', 'Combined batch: reasoning = thinking');
-    // In stream loop, reasoning is attached to first content yield
     assert(r.content !== '' && r.reasoningContent !== undefined, 'Combined batch: both content and reasoning set');
   }
 }
 
 // Test 16: Thinking continuation via /content path (the real DeepSeek bug)
 {
-  // Simulate real stream: first batch sets currentFragmentType='thinking',
-  // then subsequent chunks come through response/fragments/-1/content
   const streamChunks: Array<Record<string, unknown>> = [
-    // Batch: THINK fragment starts
     { v: { response: { fragments: [{ type: 'THINK', content: 'We' }] } } },
-    // Thinking continues via /content path (NOT /thinking_content)
     { p: 'response/fragments/-1/content', o: 'APPEND', v: '" need"' },
     { p: 'response/fragments/-1/content', o: 'APPEND', v: ' to' },
     { p: 'response/fragments/-1/content', o: 'APPEND', v: ' respond' },
-    // Pathless chunk ─ should still be thinking
     { v: ' in Vietnamese.' },
-    // Now RESPONSE fragment
     { p: 'response/fragments', o: 'APPEND', v: [{ type: 'RESPONSE', content: 'Chào bạn!' }] },
   ];
 
@@ -400,7 +393,6 @@ console.log('\n========== Full stream simulation ==========');
     }
   }
 
-  // All thinking chunks should have empty content, reasoning populated
   const allReasoning = collected
     .filter((c) => c.reasoning)
     .map((c) => c.reasoning)
@@ -414,18 +406,16 @@ console.log('\n========== Full stream simulation ==========');
   assertEq(allContent, 'Chào bạn!', 'Content-path thinking: content has response only');
   assertEq(collected.length, 6, 'Content-path thinking: 6 chunks emitted');
 
-  // First chunk: batch with THINK, content empty, reasoning = "We"
   assertEq(collected[0].content, '', 'Content-path chunk 1: content empty');
   assertEq(collected[0].reasoning, 'We', 'Content-path chunk 1: reasoning = We');
 
-  // Second chunk: /content path but thinking, should go to reasoning
   assertEq(collected[1].content, '', 'Content-path chunk 2: content empty (thinking)');
   assertEq(collected[1].reasoning, '" need"', 'Content-path chunk 2: reasoning via content path');
 }
 
 console.log('\n========== ToolSieve: no false positives on normal text ==========');
 
-// Test 16: Normal text passes through sieve
+// Test 17: Normal text passes through sieve
 {
   const sieve = new ToolSieve();
   const events = sieve.processChunk('Xin chào bạn!');
@@ -434,126 +424,297 @@ console.log('\n========== ToolSieve: no false positives on normal text =========
   assertEq(events[0].text, 'Xin chào bạn!', 'Sieve: text preserved exactly');
 }
 
-// Test 17: Vietnamese text with brackets
+// Test 18: Vietnamese text with angle brackets
 {
   const sieve = new ToolSieve();
-  const events = sieve.processChunk('Tôi sẽ trả lời: [xin chào]');
-  assertEq(events.length, 1, 'Sieve brackets: 1 event');
-  assertEq(events[0].type, 'content', 'Sieve brackets: type = content');
-  assertEq(events[0].text, 'Tôi sẽ trả lời: [xin chào]', 'Sieve brackets: text preserved with brackets');
+  const events = sieve.processChunk('Tôi sẽ trả lời: <xin chào>');
+  assertEq(events.length, 1, 'Sieve angle brackets: 1 event');
+  assertEq(events[0].type, 'content', 'Sieve angle brackets: type = content');
+  assertEq(events[0].text, 'Tôi sẽ trả lời: <xin chào>', 'Sieve angle brackets: text passed through (not [#l2a:)');
 }
 
-// Test 18: Text ending with [ (partial marker)
+// Test 19: Text ending with [ (partial of [#l2a but NOT at line start)
 {
   const sieve = new ToolSieve();
   const events1 = sieve.processChunk('text ending with [');
-  // The [ might be held as partial, so text before it should be emitted
-  const hasContent = events1.some((e) => e.type === 'content');
-  assert(hasContent, 'Sieve partial: content before [ is emitted');
-
-  const events2 = sieve.processChunk('not a marker]');
-  const content = events2
+  // [ is a partial but NOT at line start → not held, entire text emitted
+  const contentText = events1
     .filter((e) => e.type === 'content')
     .map((e) => e.text)
     .join('');
-  assertEq(content, '[not a marker]', 'Sieve partial: [ is re-emitted with next chunk');
+  assertEq(contentText, 'text ending with [', 'Sieve partial: full text emitted (partial not at line start)');
+
+  const events2 = sieve.processChunk('rest');
+  const content2 = events2
+    .filter((e) => e.type === 'content')
+    .map((e) => e.text)
+    .join('');
+  assertEq(content2, 'rest', 'Sieve partial: next chunk emitted as-is');
 }
 
-// Test 19: Text with [# but not full marker
+// Test 20: Text with [#l2a: but not at line start
 {
   const sieve = new ToolSieve();
-  // "[#" is a partial marker, might be held
-  sieve.processChunk('see [#');
-  const events2 = sieve.processChunk('not a tool call');
+  sieve.processChunk('see [#l2a:user]');
+  const events2 = sieve.processChunk(' content[/l2a:user] end');
+  // [#l2a:user] is NOT at line start → passes through as content
   const content = events2
     .filter((e) => e.type === 'content')
     .map((e) => e.text)
     .join('');
-  assertEq(content, '[#not a tool call', 'Sieve: [# re-emitted with next chunk');
+  assertEq(content, ' content[/l2a:user] end', 'Sieve: inline [#l2a:] not detected (not at line start)');
 }
 
-// Test 20: Flush emits remaining content
+// Test 21: Flush emits remaining content
 {
   const sieve = new ToolSieve();
   sieve.processChunk('hello');
   const events = sieve.flush();
-  // After processing, buffer should be empty, flush returns empty
   assertEq(events.length, 0, 'Sieve flush: no pending content after complete chunk');
 }
 
-// Test 21: Flush with partial buffer
+// Test 22: Flush with partial buffer
 {
   const sieve = new ToolSieve();
-  sieve.processChunk('text with [');
+  sieve.processChunk('text\n[#l2a');
+  // [#l2a at line start is a partial of [#l2a:... — held in buffer
   const events = sieve.flush();
   const content = events
     .filter((e) => e.type === 'content')
     .map((e) => e.text)
     .join('');
-  assert(content.includes('['), 'Sieve flush: partial marker emitted on flush');
+  assert(content.includes('[#l2a'), 'Sieve flush: partial [#l2a emitted on flush');
 }
 
-console.log('\n========== ToolSieve: unknown [#llmweb2api:*] blocks ==========');
+console.log('\n========== ToolSieve: unknown [#l2a:role] blocks ==========');
 
-// Test 22: Unknown block markers stripped, content preserved (newlines included)
+// Test 23: Unknown block markers stripped, content preserved
 {
   const sieve = new ToolSieve();
-  const events = sieve.processChunk('[#llmweb2api:question]\nCâu hỏi của tôi\n[$llmweb2api:question]');
-  assertEq(events.length, 1, 'Unknown block: 1 event');
-  assertEq(events[0].type, 'content', 'Unknown block: type = content');
-  assertEq(events[0].text, '\nCâu hỏi của tôi\n', 'Unknown block: markers stripped, inner text preserved');
+  const events = sieve.processChunk('[#l2a:question]\nCâu hỏi của tôi\n[/l2a:question]');
+  const contentText = events
+    .filter((e) => e.type === 'content')
+    .map((e) => e.text)
+    .join('');
+  assertEq(contentText, '\nCâu hỏi của tôi\n', 'Unknown block: markers stripped, inner text preserved');
 }
 
-// Test 23: Unknown block with text before and after
+// Test 24: Unknown block with text before and after
 {
   const sieve = new ToolSieve();
-  const events = sieve.processChunk('hello [#llmweb2api:question]\ntest\n[$llmweb2api:question] bye');
-  assertEq(events.length, 3, 'Unknown block: 3 events (pre + inner + post)');
-  assertEq(events[0].text, 'hello ', 'Unknown block: text before');
-  assertEq(events[1].text, '\ntest\n', 'Unknown block: inner content');
-  assertEq(events[2].text, ' bye', 'Unknown block: text after emitted immediately');
+  const events = sieve.processChunk('hello [#l2a:question]\ntest\n[/l2a:question] bye');
+  // [#l2a:question] is NOT at line start (comes after "hello ") → passes through as content
+  // But [/l2a:question] IS at line start after \n → treated as end, emitting "test"
+  // Actually: "hello [#l2a:question]" has no \n before [#l2a so it's all content
+  // "\ntest\n" then "[/l2a:question]" is at line start and closes
+  // " bye" after [/l2a:question] is content
+  const contentText = events
+    .filter((e) => e.type === 'content')
+    .map((e) => e.text)
+    .join('');
+  assert(contentText.includes('hello '), 'Unknown block inline: "hello " in content');
+  assert(contentText.includes('test'), 'Unknown block inline: "test" in content');
+  assert(contentText.includes(' bye'), 'Unknown block inline: " bye" in content');
 }
 
-// Test 24: Unknown block streaming (split across chunks)
+// Test 25: Unknown block streaming (split across chunks)
 {
   const sieve = new ToolSieve();
-  const e1 = sieve.processChunk('text [#llmweb2api:quest'); // partial
-  assertEq(e1.length, 1, 'Streaming unknown: pre-text emitted');
-  assertEq(e1[0].text, 'text ', 'Streaming unknown: pre-text');
+  // [#l2a:quest is now recognized as a partial [#l2a:...] tag (no closing ']') — held in buffer
+  const e1 = sieve.processChunk('text\n[#l2a:quest');
+  assert(
+    e1.some((e) => e.type === 'content' && e.text === 'text\n'),
+    'Streaming unknown: text before partial emitted',
+  );
+  assert(
+    !e1.some((e) => e.type === 'content' && e.text!.includes('[#l2a:quest')),
+    'Streaming unknown: partial [#l2a:quest held in buffer',
+  );
 
-  const e2 = sieve.processChunk('ion]\ninner content\n[$llmweb2api:quest');
-  // Partial end marker → inner content emitted, partial held
-  const innerContent = e2.filter((e) => e.type === 'content').map((e) => e.text).join('');
-  assertEq(innerContent, '\ninner content\n', 'Streaming unknown: inner content emitted before partial end');
+  const e2 = sieve.processChunk('ion]\ninner content\n[/l2a');
+  // [#l2a:question] reconstructed → enters unknown block mode. inner content emitted, [/l2a held as partial.
+  const innerContent = e2
+    .filter((e) => e.type === 'content')
+    .map((e) => e.text)
+    .join('');
+  assertEq(innerContent, '\ninner content\n', 'Streaming unknown: inner content emitted (tags stripped)');
+  assert(
+    !e2.some((e) => e.type === 'content' && e.text!.includes('ion]')),
+    'Streaming unknown: "ion]" consumed by tag reconstruction',
+  );
 
-  const e3 = sieve.processChunk('ion] after');
-  const afterContent = e3.filter((e) => e.type === 'content').map((e) => e.text).join('');
-  assertEq(afterContent, ' after', 'Streaming unknown: text after block');
+  const e3 = sieve.processChunk(':question] after');
+  // Completes [/l2a:question] → closes unknown block. " after" emitted as content.
+  const afterContent = e3
+    .filter((e) => e.type === 'content')
+    .map((e) => e.text)
+    .join('');
+  assertEq(afterContent, ' after', 'Streaming unknown: text after end tag emitted');
 }
 
-// Test 25: Unknown block then tool_call (both handled)
+// Test 26: Unknown block then tool_call (both handled)
 {
   const sieve = new ToolSieve();
   const events = sieve.processChunk(
-    '[#llmweb2api:question]\nwhat?\n[$llmweb2api:question]\n' +
-    '[#llmweb2api:tool_call]\n```yaml\nname: test_fn\narguments:\n  x: 1\n```\n[$llmweb2api:tool_call]',
+    '[#l2a:question]\nwhat?\n[/l2a:question]\n' +
+      '[#l2a:tool_call]\n[#l2a:parameter:id]call_1_test_fn[/l2a:parameter:id]\n[#l2a:parameter:name]test_fn[/l2a:parameter:name]\n[#l2a:parameter:arguments]{"x":1}[/l2a:parameter:arguments]\n[/l2a:tool_call]',
   );
   const contentEvents = events.filter((e) => e.type === 'content');
-  const toolEvents = events.filter((e) => e.type === 'tool_calls');
+  const toolStartEvents = events.filter((e) => e.type === 'tool_call_start');
+  const fieldNameEvents = events.filter((e) => e.type === 'tool_call_field_delta' && e.field === 'name');
   assert(contentEvents.length >= 1, 'Mixed: has content from unknown block');
-  assertEq(toolEvents.length, 1, 'Mixed: 1 tool_call event');
-  assertEq(toolEvents[0].toolCalls?.[0]?.name, 'test_fn', 'Mixed: tool_call correctly parsed');
+  assertEq(toolStartEvents.length, 1, 'Mixed: 1 tool_call_start event');
+  const nameText = fieldNameEvents.map((e) => e.text).join('');
+  assert(nameText.includes('test_fn'), 'Mixed: tool_call name streamed correctly');
 }
 
-// Test 26: Unknown block without closing → emitted as-is on flush
+// Test 27: Unknown block without closing → emitted as-is on flush
 {
   const sieve = new ToolSieve();
-  const events = sieve.processChunk('[#llmweb2api:question]\nunclosed content');
-  // Should still be waiting for end marker
+  const events = sieve.processChunk('[#l2a:question]\nunclosed content');
   const flushed = sieve.flush();
-  const flushedText = flushed.filter((e) => e.type === 'content').map((e) => e.text).join('');
-  assert(flushedText.includes('[#llmweb2api:question]'), 'Unclosed unknown: emits markers on flush');
+  const flushedText = flushed
+    .filter((e) => e.type === 'content')
+    .map((e) => e.text)
+    .join('');
+  assert(flushedText.includes('[#l2a:question]'), 'Unclosed unknown: emits opening tag on flush');
   assert(flushedText.includes('unclosed content'), 'Unclosed unknown: emits content on flush');
+}
+
+console.log('\n========== ToolSieve: tool_call tag split across chunks ==========');
+
+// Test 28: tool_call start tag split inside role name
+{
+  const sieve = new ToolSieve();
+  // Normal intro text, then tool_call start tag split in the middle
+  const e1 = sieve.processChunk('Let me check.\n\n[#l2a:tool_cal');
+  // Text before partial should be emitted, partial held
+  assert(
+    e1.some((e) => e.type === 'content' && e.text === 'Let me check.\n\n'),
+    'Split TC: text before partial emitted',
+  );
+  assertEq(e1.filter((e) => e.type === 'tool_call_start').length, 0, 'Split TC: no tool_call_start yet');
+
+  // Second chunk completes the tag
+  const e2 = sieve.processChunk(
+    'l]\n[#l2a:parameter:id]\ncall_1_glob\n[/l2a:parameter:id]\n[#l2a:parameter:name]\nglob\n[/l2a:parameter:name]\n[#l2a:parameter:arguments]\n{"pattern":"**"}\n[/l2a:parameter:arguments]\n[/l2a:tool_call]',
+  );
+  assertEq(e2.filter((e) => e.type === 'tool_call_start').length, 1, 'Split TC: tool_call_start detected');
+  const nameDeltas = e2
+    .filter((e) => e.type === 'tool_call_field_delta' && e.field === 'name')
+    .map((e) => e.text)
+    .join('');
+  assertEq(nameDeltas, 'glob', 'Split TC: name field streamed without surrounding newlines');
+  const argsDeltas = e2
+    .filter((e) => e.type === 'tool_call_field_delta' && e.field === 'arguments')
+    .map((e) => e.text)
+    .join('');
+  assert(argsDeltas.includes('{"pattern":"**"}'), 'Split TC: arguments field streamed');
+  assertEq(e2.filter((e) => e.type === 'tool_call_end').length, 1, 'Split TC: tool_call_end emitted');
+}
+
+// Test 29: Real-world example — model response with tool calls split across chunks
+{
+  const sieve = new ToolSieve();
+  const fullResponse =
+    'Hãy để tôi kiểm tra cấu trúc dự án và các file cấu hình để xem có test không.\n\n' +
+    '[#l2a:tool_call]\n[#l2a:parameter:id]\ncall_1_glob\n[/l2a:parameter:id]\n[#l2a:parameter:name]\nglob\n[/l2a:parameter:name]\n[#l2a:parameter:arguments]\n{"pattern":"**/*.test.{ts,tsx,js,jsx}"}\n[/l2a:parameter:arguments]\n[/l2a:tool_call]\n\n' +
+    '[#l2a:tool_call]\n[#l2a:parameter:id]\ncall_2_read\n[/l2a:parameter:id]\n[#l2a:parameter:name]\nread\n[/l2a:parameter:name]\n[#l2a:parameter:arguments]\n{"filePath":"package.json"}\n[/l2a:parameter:arguments]\n[/l2a:tool_call]';
+
+  // Split at a point inside the first tool_call tag name
+  const splitPoint = fullResponse.indexOf('[#l2a:tool_call]') + '[#l2a:tool_c'.length;
+  const part1 = fullResponse.slice(0, splitPoint);
+  const part2 = fullResponse.slice(splitPoint);
+
+  const e1 = sieve.processChunk(part1);
+  const e2 = sieve.processChunk(part2);
+
+  // Verify content before tool calls is preserved
+  assert(
+    e1.some((e) => e.type === 'content' && e.text!.includes('Hãy để tôi kiểm tra')),
+    'Real-world: intro text emitted',
+  );
+
+  // Verify tool calls detected
+  const tcStarts = [
+    ...e1.filter((e) => e.type === 'tool_call_start'),
+    ...e2.filter((e) => e.type === 'tool_call_start'),
+  ];
+  assertEq(tcStarts.length, 2, 'Real-world: 2 tool_call_start events');
+
+  const tcEnds = [...e1.filter((e) => e.type === 'tool_call_end'), ...e2.filter((e) => e.type === 'tool_call_end')];
+  assertEq(tcEnds.length, 2, 'Real-world: 2 tool_call_end events');
+
+  // Verify field values
+  const idDeltas = [...e1, ...e2]
+    .filter((e) => e.type === 'tool_call_field_delta' && e.field === 'id')
+    .map((e) => e.text)
+    .join('');
+  assertEq(idDeltas, 'call_1_globcall_2_read', 'Real-world: call ids streamed without surrounding newlines');
+
+  const nameDeltas = [...e1, ...e2]
+    .filter((e) => e.type === 'tool_call_field_delta' && e.field === 'name')
+    .map((e) => e.text)
+    .join('');
+  assertEq(nameDeltas, 'globread', 'Real-world: tool names streamed without surrounding newlines');
+}
+
+// Test 30: Parameter end tag split inside field name
+{
+  const sieve = new ToolSieve();
+  const e1 = sieve.processChunk('[#l2a:tool_call]\n[#l2a:parameter:id]\ncall_1_test\n[/l2a:paramet');
+  assertEq(e1.filter((e) => e.type === 'tool_call_start').length, 1, 'Split paramEnd: tool_call_start');
+  // [/l2a:paramet is a partial — the content before it (call_1_test\n) is emitted, tag held
+  const deltas1 = e1
+    .filter((e) => e.type === 'tool_call_field_delta' && e.field === 'id')
+    .map((e) => e.text)
+    .join('');
+  assert(deltas1.includes('call_1_test'), 'Split paramEnd: id value emitted');
+  // Field should NOT be closed yet (partial end tag)
+  assertEq(
+    e1.filter((e) => e.type === 'tool_call_field_end' && e.field === 'id').length,
+    0,
+    'Split paramEnd: field not closed yet',
+  );
+
+  const e2 = sieve.processChunk('er:id]\n[#l2a:parameter:name]\ntest\n[/l2a:parameter:name]\n[/l2a:tool_call]');
+  assertEq(
+    e2.filter((e) => e.type === 'tool_call_field_end' && e.field === 'id').length,
+    1,
+    'Split paramEnd: field closed after completion',
+  );
+  const nameDeltas = e2
+    .filter((e) => e.type === 'tool_call_field_delta' && e.field === 'name')
+    .map((e) => e.text)
+    .join('');
+  assert(nameDeltas.includes('test'), 'Split paramEnd: name field streamed after id closed');
+}
+
+// Test 31: Tool call with unknown block before it (split tags)
+{
+  const sieve = new ToolSieve();
+  // Unknown block that's split, followed by tool_call
+  const e1 = sieve.processChunk('[#l2a:thin');
+  // Partial held
+  assert(!e1.some((e) => e.type === 'content' && e.text!.includes('[#l2a:thin')), 'Mixed split: partial held');
+
+  const e2 = sieve.processChunk('king]\nI need to think...\n[/l2a:thinking]\n\n[#l2a:tool_ca');
+  // thinking block closed, inner text emitted, tool_call partial held
+  assert(
+    e2.some((e) => e.type === 'content' && e.text!.includes('I need to think')),
+    'Mixed split: thinking content emitted',
+  );
+  assertEq(e2.filter((e) => e.type === 'tool_call_start').length, 0, 'Mixed split: tool_call not started yet');
+
+  const e3 = sieve.processChunk(
+    'll]\n[#l2a:parameter:id]\ncall_1_test\n[/l2a:parameter:id]\n[#l2a:parameter:name]\ntest\n[/l2a:parameter:name]\n[#l2a:parameter:arguments]\n{}\n[/l2a:parameter:arguments]\n[/l2a:tool_call]',
+  );
+  assertEq(
+    e3.filter((e) => e.type === 'tool_call_start').length,
+    1,
+    'Mixed split: tool_call_start after tag completion',
+  );
+  assertEq(e3.filter((e) => e.type === 'tool_call_end').length, 1, 'Mixed split: tool_call_end');
 }
 
 console.log(`\n${'='.repeat(40)}`);
