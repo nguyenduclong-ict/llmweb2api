@@ -11,6 +11,7 @@ const LATEST_SCHEMA_VERSION = 7;
 
 export async function initDatabase(customPath?: string): Promise<DB> {
   dbPath = path.resolve(customPath || process.env.DB_PATH || './data/app.db');
+  console.log(`[DB] Initializing database at ${dbPath}`);
   const dir = path.dirname(dbPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
@@ -244,7 +245,7 @@ const migrations: Migration[] = [
     run: () => {
       const cols = getTableColumns('conversations');
       if (!cols.includes('tools_hash')) {
-        db.prepare('ALTER TABLE conversations ADD COLUMN tools_hash TEXT DEFAULT \'\'').run();
+        db.prepare("ALTER TABLE conversations ADD COLUMN tools_hash TEXT DEFAULT ''").run();
       }
     },
   },
@@ -255,7 +256,7 @@ const migrations: Migration[] = [
       const cols = getTableColumns('conversations');
       if (!cols.includes('last_used')) {
         db.prepare('ALTER TABLE conversations ADD COLUMN last_used TEXT').run();
-        db.prepare("UPDATE conversations SET last_used = created_at WHERE last_used IS NULL").run();
+        db.prepare('UPDATE conversations SET last_used = created_at WHERE last_used IS NULL').run();
       }
     },
   },

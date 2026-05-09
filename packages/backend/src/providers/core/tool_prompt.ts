@@ -237,6 +237,8 @@ QUAN TRỌNG:
   - [#llmweb2api:tools]
 
 - Tuyệt đối không được tự tạo các khối không được liệt kê ở trên
+- Các khối không hợp lệ, ví dụ: 
+  - [$llmweb2api:todowrite]
 
 ==========================
 ${YAML_SYNTAX}`;

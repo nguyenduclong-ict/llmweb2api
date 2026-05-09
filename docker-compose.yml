@@ -1,0 +1,17 @@
+﻿services:
+  llmweb2api:
+    build: .
+    container_name: llmweb2api
+    restart: unless-stopped
+    ports:
+      - '3567:3000'
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DASHBOARD_PASSWORD=admin123
+      - DB_PATH=/app/data/app.db
+    volumes:
+      - llmweb2api_data:/app/data
+
+volumes:
+  llmweb2api_data:

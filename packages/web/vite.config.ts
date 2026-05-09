@@ -8,9 +8,6 @@ dotenv.config();
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  build: {
-    outDir: '../dist/ui',
-  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

@@ -66,7 +66,8 @@ statsRoutes.get('/stats/daily-tokens', (req: Request, res: Response) => {
   res.json(getDailyTokenStats(startDate as string, endDate as string, g));
 });
 
-// GET /api/stats/kpi - KPI cards (so sanh hom nay vs hom qua)
-statsRoutes.get('/stats/kpi', (_req: Request, res: Response) => {
-  res.json(getKpiStats());
+// GET /api/stats/kpi - KPI cards
+statsRoutes.get('/stats/kpi', (req: Request, res: Response) => {
+  const { startDate, endDate } = req.query;
+  res.json(getKpiStats(startDate as string, endDate as string));
 });

@@ -408,60 +408,68 @@ export interface KPIResponse {
   tokensUsedChange: number;
 }
 
-export function getKpiStats(): KPIResponse {
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10);
-  const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+export function getKpiStats(startDate?: string, endDate?: string): KPIResponse {
+  if (!startDate && !endDate) {
+    const now = new Date();
+    startDate = now.toISOString().slice(0, 10);
+    endDate = startDate + 'T23:59:59';
+  }
 
-  const todayStats = prepareAndGet<{ requests: number; errors: number; p95: number; tokens: number }>(
+  const s = new Date(startDate!);
+  const e = endDate ? new Date(endDate!) : new Date();
+  const rangeMs = e.getTime() - s.getTime();
+  const prevEnd = new Date(s.getTime() - 1);
+  const prevStart = new Date(prevEnd.getTime() - rangeMs);
+
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  const currentStart = fmt(s);
+  const currentEnd = endDate ? fmt(e) + 'T23:59:59' : fmt(e);
+  const prevStartStr = fmt(prevStart);
+  const prevEndStr = fmt(prevEnd) + 'T23:59:59';
+
+  const currentStats = prepareAndGet<{ requests: number; errors: number; p95: number; tokens: number }>(
     `
     SELECT
       COUNT(*) AS requests,
       COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) AS errors,
-      COALESCE(
-        (SELECT duration_ms FROM request_logs WHERE date(created_at) = ? AND duration_ms IS NOT NULL ORDER BY duration_ms ASC LIMIT 1 OFFSET CAST(0.95 * (SELECT COUNT(*) FROM request_logs WHERE date(created_at) = ? AND duration_ms IS NOT NULL) AS INTEGER)),
-        0
-      ) AS p95,
+      COALESCE(AVG(duration_ms), 0) AS p95,
       COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
-    FROM request_logs WHERE date(created_at) = ?
+    FROM request_logs WHERE created_at >= ? AND created_at <= ?
   `,
-    [today, today, today],
+    [currentStart, currentEnd + (endDate ? '' : '')],
   ) ?? { requests: 0, errors: 0, p95: 0, tokens: 0 };
 
-  const yesterdayStats = prepareAndGet<{ requests: number; errors: number; p95: number; tokens: number }>(
+  const prevStats = prepareAndGet<{ requests: number; errors: number; p95: number; tokens: number }>(
     `
     SELECT
       COUNT(*) AS requests,
       COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) AS errors,
-      COALESCE(
-        (SELECT duration_ms FROM request_logs WHERE date(created_at) = ? AND duration_ms IS NOT NULL ORDER BY duration_ms ASC LIMIT 1 OFFSET CAST(0.95 * (SELECT COUNT(*) FROM request_logs WHERE date(created_at) = ? AND duration_ms IS NOT NULL) AS INTEGER)),
-        0
-      ) AS p95,
+      COALESCE(AVG(duration_ms), 0) AS p95,
       COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
-    FROM request_logs WHERE date(created_at) = ?
+    FROM request_logs WHERE created_at >= ? AND created_at <= ?
   `,
-    [yesterday, yesterday, yesterday],
+    [prevStartStr, prevEndStr],
   ) ?? { requests: 0, errors: 0, p95: 0, tokens: 0 };
 
-  const calcChange = (today: number, yesterday: number): number => {
-    if (yesterday === 0) return today > 0 ? 100 : 0;
-    return Math.round(((today - yesterday) / yesterday) * 1000) / 10;
+  const calcChange = (curr: number, prev: number): number => {
+    if (prev === 0) return curr > 0 ? 100 : 0;
+    return Math.round(((curr - prev) / prev) * 1000) / 10;
   };
 
-  const todayErrorRate =
-    todayStats.requests > 0 ? Math.round((todayStats.errors / todayStats.requests) * 1000) / 10 : 0;
-  const yesterdayErrorRate =
-    yesterdayStats.requests > 0 ? Math.round((yesterdayStats.errors / yesterdayStats.requests) * 1000) / 10 : 0;
+  const currentErrorRate =
+    currentStats.requests > 0 ? Math.round((currentStats.errors / currentStats.requests) * 1000) / 10 : 0;
+  const prevErrorRate =
+    prevStats.requests > 0 ? Math.round((prevStats.errors / prevStats.requests) * 1000) / 10 : 0;
 
   return {
-    totalRequests: todayStats.requests,
-    totalRequestsChange: calcChange(todayStats.requests, yesterdayStats.requests),
-    p95Latency: todayStats.p95,
-    p95LatencyChange: calcChange(todayStats.p95, yesterdayStats.p95),
-    errorRate: todayErrorRate,
-    errorRateChange: Math.round((todayErrorRate - yesterdayErrorRate) * 10) / 10,
-    tokensUsed: todayStats.tokens,
-    tokensUsedChange: calcChange(todayStats.tokens, yesterdayStats.tokens),
+    totalRequests: currentStats.requests,
+    totalRequestsChange: calcChange(currentStats.requests, prevStats.requests),
+    p95Latency: Math.round(currentStats.p95),
+    p95LatencyChange: calcChange(currentStats.p95, prevStats.p95),
+    errorRate: currentErrorRate,
+    errorRateChange: Math.round((currentErrorRate - prevErrorRate) * 10) / 10,
+    tokensUsed: currentStats.tokens,
+    tokensUsedChange: calcChange(currentStats.tokens, prevStats.tokens),
   };
 }
 

@@ -1,0 +1,32 @@
+FROM node:22-alpine AS base
+RUN corepack enable && corepack prepare pnpm@9 --activate
+
+FROM base AS builder
+WORKDIR /app
+
+RUN apk add --no-cache python3 make g++
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY packages/backend/package.json ./packages/backend/
+COPY packages/backend/scripts ./packages/backend/scripts/
+COPY packages/web/package.json ./packages/web/
+RUN pnpm install --frozen-lockfile --node-linker=hoisted
+COPY . .
+RUN pnpm build:backend
+RUN pnpm build:web
+
+FROM base AS runtime
+WORKDIR /app
+RUN apk add --no-cache python3 make g++
+COPY pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml ./
+COPY packages/backend/package.json ./packages/backend/
+COPY packages/backend/scripts ./packages/backend/scripts/
+RUN pnpm install --prod --frozen-lockfile --node-linker=hoisted
+COPY --from=builder /app/packages/backend/dist ./packages/backend/dist
+COPY --from=builder /app/packages/backend/scripts ./packages/backend/scripts
+COPY --from=builder /app/packages/web/dist ./packages/web/dist
+RUN mkdir -p /app/data
+EXPOSE 3000
+ENV PORT=3000
+ENV HOST=0.0.0.0
+CMD ["node", "packages/backend/dist/index.js"]

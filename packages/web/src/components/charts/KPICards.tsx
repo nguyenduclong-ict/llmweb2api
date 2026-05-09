@@ -4,8 +4,8 @@ import { Activity, Clock, AlertTriangle, Coins, TrendingUp, TrendingDown } from 
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 
 function formatNumber(num: number): string {
-  if (num >= 1_000_000) return ${(num / 1_000_000).toFixed(1)}M;
-  if (num >= 1_000) return ${(num / 1_000).toFixed(1)}K;
+  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
+  if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
   return num.toString();
 }
 
@@ -16,9 +16,10 @@ function TrendIndicator({ value, inverted = false }: { value: number; inverted?:
   const colorClass = isGood ? 'text-green-500' : 'text-red-500';
   const prefix = isUp ? '+' : '';
   return (
-    <span className={inline-flex items-center gap-0.5 text-xs font-medium }>
-      <TrendIcon className='h-3 w-3' />
-      {prefix}{value}%
+    <span className={`flex items-center gap-0.5 text-xs font-medium ${colorClass}`}>
+      <TrendIcon className="h-3 w-3" />
+      {prefix}
+      {value}%
     </span>
   );
 }
@@ -56,14 +57,14 @@ export function KPICards({ startDate, endDate }: Props) {
 
   if (error || !data) {
     return (
-      <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {PLACEHOLDER_TITLES.map((title) => (
           <Card key={title}>
-            <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
-              <CardTitle className='text-sm font-medium'>{title}</CardTitle>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">{title}</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className='text-2xl font-bold text-muted-foreground'>--</div>
+              <div className="text-2xl font-bold text-muted-foreground">--</div>
             </CardContent>
           </Card>
         ))}
@@ -72,26 +73,53 @@ export function KPICards({ startDate, endDate }: Props) {
   }
 
   const cards = [
-    { title: 'Total Requests', value: formatNumber(data.totalRequests), subtitle: 'vs previous period', icon: Activity, color: 'text-blue-500', trend: data.totalRequestsChange, inverted: false },
-    { title: 'P95 Latency', value: ${data.p95Latency} ms, subtitle: 'vs previous period', icon: Clock, color: 'text-amber-500', trend: data.p95LatencyChange, inverted: true },
-    { title: 'Error Rate', value: ${data.errorRate}%, subtitle: 'vs previous period', icon: AlertTriangle, color: 'text-red-500', trend: data.errorRateChange, inverted: true },
-    { title: 'Tokens Used', value: formatNumber(data.tokensUsed), subtitle: 'vs previous period', icon: Coins, color: 'text-purple-500', trend: data.tokensUsedChange, inverted: false },
+    {
+      title: 'Tokens Used',
+      value: formatNumber(data.tokensUsed),
+      icon: Coins,
+      color: 'text-purple-500',
+      trend: data.tokensUsedChange,
+      inverted: false,
+    },
+    {
+      title: 'Total Requests',
+      value: formatNumber(data.totalRequests),
+      icon: Activity,
+      color: 'text-blue-500',
+      trend: data.totalRequestsChange,
+      inverted: false,
+    },
+    {
+      title: 'P95 Latency',
+      value: `${data.p95Latency} ms`,
+      icon: Clock,
+      color: 'text-amber-500',
+      trend: data.p95LatencyChange,
+      inverted: true,
+    },
+    {
+      title: 'Error Rate',
+      value: `${data.errorRate}%`,
+      icon: AlertTriangle,
+      color: 'text-red-500',
+      trend: data.errorRateChange,
+      inverted: true,
+    },
   ];
 
   return (
-    <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
+    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
       {cards.map((card) => (
-        <Card key={card.title} className='hover:shadow-md transition-shadow'>
-          <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
-            <CardTitle className='text-sm font-medium'>{card.title}</CardTitle>
-            <card.icon className={h-4 w-4 } />
+        <Card key={card.title} className="hover:shadow-md transition-shadow">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">{card.title}</CardTitle>
+            <card.icon className={'h-4 w-4 '} />
           </CardHeader>
           <CardContent>
-            <div className='flex items-baseline gap-2'>
-              <div className='text-2xl font-bold'>{card.value}</div>
+            <div className="flex items-baseline gap-2">
+              <div className="text-2xl font-bold">{card.value}</div>
               <TrendIndicator value={card.trend} inverted={card.inverted} />
             </div>
-            <p className='text-xs text-muted-foreground mt-0.5'>{card.subtitle}</p>
           </CardContent>
         </Card>
       ))}

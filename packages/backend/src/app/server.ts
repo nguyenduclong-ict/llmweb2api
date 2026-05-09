@@ -58,8 +58,13 @@ export function createServer(): express.Application {
 
   startCleanupTimer();
 
-  const uiDistPath = path.resolve(__dirname, '..', 'ui');
+  const uiDistPath = path.resolve(__dirname, '..', '..', '..', 'web', 'dist');
   const indexPath = path.join(uiDistPath, 'index.html');
+
+  console.log(`[UI] __dirname: ${__dirname}`);
+  console.log(`[UI] Resolved path: ${uiDistPath}`);
+  console.log(`[UI] index.html path: ${indexPath}`);
+  console.log(`[UI] index.html exists: ${fs.existsSync(indexPath)}`);
 
   if (fs.existsSync(indexPath)) {
     app.use(express.static(uiDistPath, { maxAge: '7d' }));

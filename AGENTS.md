@@ -5,36 +5,37 @@
 ### Backend
 
 ```bash
-pnpm typecheck         # Kiểm tra TypeScript
-pnpm lint              # ESLint check src/
-pnpm format:check      # Prettier check
+pnpm typecheck:backend   # Kiểm tra TypeScript
+pnpm lint:backend        # ESLint check src/
+pnpm format:check:backend # Prettier check
 ```
 
 Hoặc chạy cả 3:
 
 ```bash
-pnpm check             # typecheck + lint + format:check
+pnpm check               # typecheck + lint + format:check tất cả
 ```
 
 ### Frontend
 
 ```bash
-cd ui
-pnpm typecheck
-pnpm lint
-pnpm format:check
+pnpm typecheck:web       # Kiểm tra TypeScript
+pnpm lint:web            # ESLint check
+pnpm format:check:web    # Prettier check
 ```
 
 ### Auto-format code
 
 ```bash
-pnpm format            # Format backend
-pnpm format:ui         # Format frontend
-pnpm format:all        # Format cả 2
+pnpm format:backend      # Format backend (alias: pnpm format)
+pnpm format:web          # Format frontend
+pnpm format:all          # Format cả 2
 ```
 
-### Lint cả 2
+### Lint
 
 ```bash
-pnpm lint:all          # ESLint backend + frontend
+pnpm lint:backend        # ESLint backend (alias: pnpm lint)
+pnpm lint:web            # ESLint frontend
+pnpm lint:all            # ESLint cả 2
 ```

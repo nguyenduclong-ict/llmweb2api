@@ -66,4 +66,3 @@ export function DateRangePicker({
     </div>
   )
 }
-  </parameter>
