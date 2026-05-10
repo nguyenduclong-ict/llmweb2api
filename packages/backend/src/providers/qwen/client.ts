@@ -1,7 +1,27 @@
 import crypto from 'crypto';
-import type { QwenFilePayload, StsTokenData, StsTokenResponse, UploadFileInfo } from './types';
+import type { QwenFilePayload, StsTokenData, StsTokenResponse, UploadFileInfo, QwenFeatureConfig } from './types';
 import { QWEN_API_URLS, QWEN_BASE_URL } from './types';
 import { qwenTlsJson, qwenTlsRequest, qwenTlsStreamLines } from './transport';
+
+type ThinkingMode = 'Auto' | 'Fast' | 'Thinking';
+
+function buildFeatureConfig(thinkingMode?: ThinkingMode): QwenFeatureConfig {
+  const mode: ThinkingMode = thinkingMode ?? 'Auto';
+  const thinkingEnabled = true;
+  const autoThinking = mode === 'Auto';
+  return {
+    thinking_enabled: thinkingEnabled,
+    output_schema: 'phase',
+    research_mode: 'normal',
+    auto_thinking: autoThinking,
+    thinking_mode: mode,
+    thinking_format: 'summary',
+    auto_search: false,
+    function_calling: false,
+    enable_tools: false,
+    tool_choice: 'none',
+  };
+}
 
 function uuidv4(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -42,6 +62,7 @@ export async function* streamCompletion(
   chatType: string,
   files: QwenFilePayload[],
   signal?: AbortSignal,
+  thinkingMode?: ThinkingMode,
 ): AsyncGenerator<string> {
   const messageFid = uuidv4();
   const childId = uuidv4();
@@ -66,18 +87,7 @@ export async function* streamCompletion(
         timestamp: Math.floor(Date.now() / 1000),
         models: [model],
         chat_type: chatType,
-        feature_config: {
-          thinking_enabled: true,
-          output_schema: 'phase',
-          research_mode: 'normal',
-          auto_thinking: true,
-          thinking_mode: 'Auto',
-          thinking_format: 'summary',
-          auto_search: false,
-          function_calling: false,
-          enable_tools: false,
-          tool_choice: 'none',
-        },
+        feature_config: buildFeatureConfig(thinkingMode),
         extra: { meta: { subChatType: chatType } },
         sub_chat_type: chatType,
         parent_id: parentId,
@@ -95,6 +105,73 @@ export async function* streamCompletion(
     },
     signal,
   );
+}
+
+export async function* streamEditMessage(
+  token: string,
+  chatId: string,
+  model: string,
+  parentId: string | null,
+  content: string,
+  files: QwenFilePayload[],
+  signal?: AbortSignal,
+  thinkingMode?: ThinkingMode,
+): AsyncGenerator<string> {
+  const messageFid = uuidv4();
+  const childId = uuidv4();
+
+  const payload = {
+    stream: true,
+    version: '2.1',
+    incremental_output: true,
+    chat_id: chatId,
+    chat_mode: 'normal',
+    model,
+    parent_id: parentId,
+    messages: [
+      {
+        fid: messageFid,
+        parentId,
+        childrenIds: [childId],
+        role: 'user',
+        content,
+        user_action: 'edit',
+        files,
+        timestamp: Math.floor(Date.now() / 1000),
+        models: [model],
+        chat_type: 't2t',
+        feature_config: buildFeatureConfig(thinkingMode),
+        extra: { meta: { subChatType: 't2t' } },
+        sub_chat_type: 't2t',
+        parent_id: parentId,
+      },
+    ],
+    timestamp: Math.floor(Date.now() / 1000),
+  };
+
+  yield* qwenTlsStreamLines(
+    {
+      token,
+      url: `${QWEN_API_URLS.chatCompletions}?chat_id=${chatId}`,
+      referer: `${QWEN_BASE_URL}/c/${chatId}`,
+      body: payload,
+    },
+    signal,
+  );
+}
+
+export async function stopStream(token: string, chatId: string, _responseId: string): Promise<void> {
+  try {
+    await qwenTlsRequest({
+      token,
+      url: `${QWEN_API_URLS.chatCompletionsStop}?chat_id=${chatId}`,
+      method: 'POST',
+      referer: `${QWEN_BASE_URL}/c/${chatId}`,
+      body: { chat_id: chatId },
+    });
+  } catch {
+    /* ignore stop errors */
+  }
 }
 
 export async function deleteSession(token: string, chatId: string): Promise<void> {

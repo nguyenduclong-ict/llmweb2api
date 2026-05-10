@@ -17,18 +17,18 @@ export default function Analysis() {
   const granularity = useMemo(() => getGranularityForRange(preset), [preset]);
 
   return (
-    <div className='space-y-6'>
-      <div className='flex items-center justify-between flex-wrap gap-4'>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className='text-3xl font-bold tracking-tight'>Analysis</h1>
-          <p className='text-muted-foreground'>API performance, traffic, and system health overview</p>
+          <h1 className="text-3xl font-bold tracking-tight">Analysis</h1>
+          <p className="text-muted-foreground">API performance, traffic, and system health overview</p>
         </div>
         <DateRangeSelector value={preset} onChange={handlePresetChange} />
       </div>
 
       <KPICards startDate={startDate} endDate={endDate} />
 
-      <div className='grid gap-6 lg:grid-cols-2'>
+      <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Requests and Errors Over Time</CardTitle>

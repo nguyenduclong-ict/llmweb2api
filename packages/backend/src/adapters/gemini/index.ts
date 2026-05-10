@@ -55,9 +55,7 @@ export const geminiAdapter: Adapter = {
   parseRequest(body: any): InternalRequest {
     const vendorModel = body.modelOverride ?? 'gemini-pro';
     const genConfig = body.generationConfig ?? {};
-    const resolved = resolveModel('gemini', vendorModel, {
-      thinking: geminiThinkingToFlag(genConfig),
-    });
+    const resolved = resolveModel('gemini', vendorModel, geminiThinkingToFlag(genConfig));
 
     const messages: InternalMessage[] = [];
 

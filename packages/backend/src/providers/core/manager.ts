@@ -177,7 +177,7 @@ interface CachedConversation {
   accountId: number;
   hashCache: HashCacheMap;
   toolsHash: string | null;
-  lastMessageId: number | null;
+  lastMessageId: string | null;
 }
 
 const conversationCache = new Map<string, CachedConversation>();
@@ -383,7 +383,7 @@ async function processFirstCachedChat(
     updateSessionLastRequestId(ctx.sessionId, ctx.metadata.lastRequestMessageId as string);
   }
 
-  const lastMessageId = ctx.metadata.lastResponseMessageId ? Number(ctx.metadata.lastResponseMessageId) : null;
+  const lastMessageId = ctx.metadata.lastResponseMessageId ? String(ctx.metadata.lastResponseMessageId) : null;
   const hashCache = buildHashCacheFromRequest(request, ctx.metadata);
   const toolsHash = hashTools(request.tools as unknown[] | undefined);
 
@@ -437,7 +437,7 @@ async function processFirstCachedChatStream(
         if (signal?.aborted) return;
         if (!saved) {
           saved = true;
-          const lastMessageId = ctx.metadata.lastResponseMessageId ? Number(ctx.metadata.lastResponseMessageId) : null;
+          const lastMessageId = ctx.metadata.lastResponseMessageId ? String(ctx.metadata.lastResponseMessageId) : null;
           const hashCache = buildHashCacheFromRequest(request, ctx.metadata);
           conversationCache.set(ctx.sessionId, {
             conversationId: ctx.sessionId,
@@ -465,7 +465,7 @@ async function processFirstCachedChatStream(
           updateSessionParent(ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
           const conv = conversationCache.get(ctx.sessionId);
           if (conv) {
-            conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
             updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
             conversationModel.saveHashCache(
               ctx.sessionId,
@@ -484,7 +484,7 @@ async function processFirstCachedChatStream(
         updateSessionParent(ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
         const conv = conversationCache.get(ctx.sessionId);
         if (conv) {
-          conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
           updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
           conversationModel.saveHashCache(
             ctx.sessionId,
@@ -549,7 +549,7 @@ async function processCachedChat(
 
     if (ctx.metadata.lastResponseMessageId) {
       updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-      cached.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+      cached.lastMessageId = String(ctx.metadata.lastResponseMessageId);
       updateHashCacheParentId(cached.hashCache, request.messages, cached.lastMessageId);
     }
     if (ctx.metadata.lastRequestMessageId) {
@@ -578,7 +578,7 @@ async function processCachedChat(
 
     if (ctx.metadata.lastResponseMessageId) {
       updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-      cached.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+      cached.lastMessageId = String(ctx.metadata.lastResponseMessageId);
       updateHashCacheParentId(cached.hashCache, request.messages, cached.lastMessageId);
     }
     if (ctx.metadata.lastRequestMessageId) {
@@ -610,7 +610,7 @@ async function processCachedChat(
 
   if (ctx.metadata.lastResponseMessageId) {
     updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-    cached.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+    cached.lastMessageId = String(ctx.metadata.lastResponseMessageId);
     updateHashCacheParentId(cached.hashCache, request.messages, cached.lastMessageId);
   }
   if (ctx.metadata.lastRequestMessageId) {
@@ -694,7 +694,7 @@ async function processCachedChatStream(
       console.log(`[CONV] Full hash match for ${conversationId}, regenerating (no edit id, full regenerate)`);
     }
     const ctx = await buildSessionContext(providerName, conv.accountId, conversationId);
-    ctx.metadata.editMessageId = lastReqId ? Number(lastReqId) : undefined;
+    ctx.metadata.editMessageId = lastReqId ?? undefined;
     ctx.metadata.conversationId = conversationId;
     attachCachedImageSummaries(ctx, conv.hashCache, request.messages);
 
@@ -721,7 +721,7 @@ async function processCachedChatStream(
             if (ctx.metadata.lastResponseMessageId) {
               lastMsgSaved = true;
               updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-              conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+              conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
               updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
               conversationModel.saveHashCache(
                 conversationId,
@@ -736,7 +736,7 @@ async function processCachedChatStream(
           if (!lastMsgSaved && ctx.metadata.lastResponseMessageId) {
             lastMsgSaved = true;
             updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-            conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
             updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
             conversationModel.saveHashCache(
               conversationId,
@@ -752,7 +752,7 @@ async function processCachedChatStream(
       } finally {
         if (ctx.metadata.lastResponseMessageId && !lastMsgSaved) {
           updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-          conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
           updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
           conversationModel.saveHashCache(
             conversationId,
@@ -785,7 +785,7 @@ async function processCachedChatStream(
     const entry = getSession(conversationId);
     const lastReqId = entry?.lastRequestMessageId;
     const editMsgId = diff.matchedCount > 0 ? diff.parentMessageId : undefined;
-    const useEditId = lastReqId ? Number(lastReqId) : (editMsgId ?? undefined);
+    const useEditId = lastReqId ?? editMsgId ?? undefined;
 
     const ctx = await buildSessionContext(providerName, conv.accountId, conversationId);
     ctx.metadata.editMessageId = useEditId;
@@ -817,7 +817,7 @@ async function processCachedChatStream(
             if (ctx.metadata.lastResponseMessageId) {
               lastMsgSaved = true;
               updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-              conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+              conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
               updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
               conversationModel.saveHashCache(
                 conversationId,
@@ -832,7 +832,7 @@ async function processCachedChatStream(
           if (!lastMsgSaved && ctx.metadata.lastResponseMessageId) {
             lastMsgSaved = true;
             updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-            conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
             updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
             conversationModel.saveHashCache(
               conversationId,
@@ -848,7 +848,7 @@ async function processCachedChatStream(
       } finally {
         if (ctx.metadata.lastResponseMessageId && !lastMsgSaved) {
           updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-          conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
           updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
           conversationModel.saveHashCache(
             conversationId,
@@ -913,7 +913,7 @@ async function processCachedChatStream(
           if (ctx.metadata.lastResponseMessageId) {
             lastMsgSaved = true;
             updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-            conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
             updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
             conversationModel.saveHashCache(
               conversationId,
@@ -928,7 +928,7 @@ async function processCachedChatStream(
         if (!lastMsgSaved && ctx.metadata.lastResponseMessageId) {
           lastMsgSaved = true;
           updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-          conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
           updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
           conversationModel.saveHashCache(
             conversationId,
@@ -944,7 +944,7 @@ async function processCachedChatStream(
     } finally {
       if (ctx.metadata.lastResponseMessageId && !lastMsgSaved) {
         updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-        conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+        conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
         updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
         conversationModel.saveHashCache(
           conversationId,
@@ -979,7 +979,7 @@ async function processCachedChatStream(
 async function restoreSessionContext(
   providerName: string,
   conversationId: string,
-  parentMessageIdOverride?: number | null,
+  parentMessageIdOverride?: string | null,
 ): Promise<{ ctx: SessionContext; account: AccountSelection }> {
   ensureProvider(providerName);
   const account = await selectAccount(providerName);
@@ -1084,7 +1084,7 @@ async function handleDbRestoreWithHash(
 
   if (ctx.metadata.lastResponseMessageId) {
     updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-    const newLastId = Number(ctx.metadata.lastResponseMessageId);
+    const newLastId = String(ctx.metadata.lastResponseMessageId);
     addRequestToHashCache(hashCache, request.messages, ctx.metadata);
     updateHashCacheParentId(hashCache, request.messages, newLastId);
     conversationCache.set(conversationId, {
@@ -1159,7 +1159,7 @@ async function handleDbRestoreStreamWithHash(
       console.log(`[CONV] DB full hash match for ${conversationId}, regenerating (no edit id, full regenerate)`);
     }
     ctx.metadata.parentMessageId = undefined;
-    ctx.metadata.editMessageId = lastReqId ? Number(lastReqId) : undefined;
+    ctx.metadata.editMessageId = lastReqId ?? undefined;
     ctx.metadata.toolsChanged = toolsChanged;
     attachCachedImageSummaries(ctx, hashCache, request.messages);
 
@@ -1186,7 +1186,7 @@ async function handleDbRestoreStreamWithHash(
             if (ctx.metadata.lastResponseMessageId) {
               lastMsgSaved = true;
               updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-              const newLastMessageId = Number(ctx.metadata.lastResponseMessageId);
+              const newLastMessageId = String(ctx.metadata.lastResponseMessageId);
               updateHashCacheParentId(hashCache, request.messages, newLastMessageId);
               conversationModel.saveHashCache(
                 conversationId,
@@ -1201,7 +1201,7 @@ async function handleDbRestoreStreamWithHash(
           if (!lastMsgSaved && ctx.metadata.lastResponseMessageId) {
             lastMsgSaved = true;
             updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-            const newLastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            const newLastMessageId = String(ctx.metadata.lastResponseMessageId);
             updateHashCacheParentId(hashCache, request.messages, newLastMessageId);
             conversationModel.saveHashCache(
               conversationId,
@@ -1217,7 +1217,7 @@ async function handleDbRestoreStreamWithHash(
       } finally {
         if (ctx.metadata.lastResponseMessageId && !lastMsgSaved) {
           updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-          const newLastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          const newLastMessageId = String(ctx.metadata.lastResponseMessageId);
           updateHashCacheParentId(hashCache, request.messages, newLastMessageId);
           conversationModel.saveHashCache(
             conversationId,
@@ -1257,7 +1257,7 @@ async function handleDbRestoreStreamWithHash(
     const entry = getSession(conversationId);
     const lastReqId = entry?.lastRequestMessageId;
     const editMsgId = diff.matchedCount > 0 ? diff.parentMessageId : undefined;
-    ctx.metadata.editMessageId = lastReqId ? Number(lastReqId) : (editMsgId ?? undefined);
+    ctx.metadata.editMessageId = lastReqId ?? editMsgId ?? undefined;
   }
 
   const diffRequest: InternalRequest = { ...request, messages: diff.messagesToSend };
@@ -1299,7 +1299,7 @@ async function handleDbRestoreStreamWithHash(
           if (ctx.metadata.lastResponseMessageId) {
             lastMsgSaved = true;
             updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
-            const newLastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            const newLastMessageId = String(ctx.metadata.lastResponseMessageId);
             updateHashCacheParentId(hashCache, request.messages, newLastMessageId);
             conversationCache.set(conversationId, {
               conversationId,
@@ -1323,7 +1323,7 @@ async function handleDbRestoreStreamWithHash(
           updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
           const conv = conversationCache.get(conversationId);
           if (conv) {
-            conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+            conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
             updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
             conversationModel.saveHashCache(
               conversationId,
@@ -1342,7 +1342,7 @@ async function handleDbRestoreStreamWithHash(
         updateSessionParent(conversationId, ctx.metadata.lastResponseMessageId as string);
         const conv = conversationCache.get(conversationId);
         if (conv) {
-          conv.lastMessageId = Number(ctx.metadata.lastResponseMessageId);
+          conv.lastMessageId = String(ctx.metadata.lastResponseMessageId);
           updateHashCacheParentId(conv.hashCache, request.messages, conv.lastMessageId);
           conversationModel.saveHashCache(
             conversationId,
@@ -1359,7 +1359,7 @@ async function handleDbRestoreStreamWithHash(
       }
       if (!saved) {
         const savedLastMessageId = ctx.metadata.lastResponseMessageId
-          ? Number(ctx.metadata.lastResponseMessageId)
+          ? String(ctx.metadata.lastResponseMessageId)
           : lastMessageId;
         addRequestToHashCache(hashCache, request.messages, ctx.metadata);
         if (savedLastMessageId !== null) {
@@ -1389,10 +1389,10 @@ async function handleDbRestoreStreamWithHash(
 
 // --- Hash Helpers ---
 
-function resolveLatestMessageId(hashCache: HashCacheMap, storedLastMessageId: number | null): number | null {
+function resolveLatestMessageId(hashCache: HashCacheMap, storedLastMessageId: string | null): string | null {
   let latest = storedLastMessageId;
   for (const entry of Object.values(hashCache)) {
-    if (entry.parent_message_id !== null && (latest === null || entry.parent_message_id > latest)) {
+    if (entry.parent_message_id !== null && (latest === null || entry.parent_message_id.localeCompare(latest) > 0)) {
       latest = entry.parent_message_id;
     }
   }
@@ -1409,10 +1409,10 @@ function computeHashDiff(
   hashCache: HashCacheMap,
   requestMessages: InternalMessage[],
   cachedCount: number,
-  lastMessageId: number | null,
+  lastMessageId: string | null,
 ): {
   messagesToSend: InternalMessage[];
-  parentMessageId: number | null;
+  parentMessageId: string | null;
   lastMatchedHash: string | null;
   isFullMatch: boolean;
   matchedCount: number;
@@ -1527,8 +1527,8 @@ function addRequestToHashCache(
   metadata: Record<string, unknown>,
 ): void {
   const tracked = filterTrackedMessages(requestMessages);
-  const parentMessageId = metadata.lastResponseMessageId ? Number(metadata.lastResponseMessageId) : null;
-  const requestMessageId = metadata.lastRequestMessageId ? Number(metadata.lastRequestMessageId) : 0;
+  const parentMessageId = metadata.lastResponseMessageId ? String(metadata.lastResponseMessageId) : null;
+  const requestMessageId = metadata.lastRequestMessageId ? String(metadata.lastRequestMessageId) : '';
   const imageSummaries = new Map(
     (
       (metadata.imageSummaries as Array<{ messageHash: string; summary: string; imageCount: number }> | undefined) ?? []
@@ -1589,7 +1589,7 @@ function buildHashCacheFromMessages(messages: InternalMessage[]): HashCacheMap {
   for (const msg of tracked) {
     const h = hashMessage(msg);
     if (!hashCache[h]) {
-      hashCache[h] = { parent_message_id: null, request_message_id: 0 };
+      hashCache[h] = { parent_message_id: null, request_message_id: '' };
     }
   }
   return hashCache;

@@ -45,11 +45,11 @@ export default function RequestStatusLineChart({ startDate, endDate, granularity
   const tickFormatter = useMemo(() => (value: string) => formatTick(value, granularity), [granularity]);
 
   return (
-    <ResponsiveContainer width='100%' height={300}>
+    <ResponsiveContainer width="100%" height={300}>
       <LineChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-        <CartesianGrid strokeDasharray='3 3' className='stroke-muted' />
+        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
         <XAxis
-          dataKey='time'
+          dataKey="time"
           tick={{ fontSize: 12 }}
           interval={Math.max(0, Math.floor(data.length / 8) - 1)}
           tickFormatter={tickFormatter}
@@ -59,9 +59,9 @@ export default function RequestStatusLineChart({ startDate, endDate, granularity
           content={({ active, payload }) => {
             if (active && payload && payload.length) {
               return (
-                <div className='bg-popover border rounded-lg p-2 text-sm shadow-md'>
+                <div className="bg-popover border rounded-lg p-2 text-sm shadow-md">
                   {payload.map((entry) => (
-                    <p key={entry.dataKey} className='text-muted-foreground'>
+                    <p key={entry.dataKey} className="text-muted-foreground">
                       {entry.dataKey === 'total' ? 'Total' : 'Errors'}: {entry.value}
                     </p>
                   ))}
@@ -72,8 +72,8 @@ export default function RequestStatusLineChart({ startDate, endDate, granularity
           }}
         />
         <Legend />
-        <Line type='monotone' dataKey='total' name='Total Requests' stroke='#3b82f6' strokeWidth={2} dot={false} />
-        <Line type='monotone' dataKey='errors' name='Errors (4xx+5xx)' stroke='#ef4444' strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="total" name="Total Requests" stroke="#3b82f6" strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="errors" name="Errors (4xx+5xx)" stroke="#ef4444" strokeWidth={2} dot={false} />
       </LineChart>
     </ResponsiveContainer>
   );

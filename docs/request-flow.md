@@ -1,77 +1,106 @@
-# DeepSeek Request Flow
+# Request Flow
 
-## Auth: Token Management
+## Tổng quan
 
-Mỗi account lưu token trong `accounts.session` (JSON). Luồng auth:
+Backend hỗ trợ nhiều provider (DeepSeek, Qwen, ChatGPT) và nhiều adapter (OpenAI, Anthropic, Gemini). Mỗi request được route dựa trên adapter type, chuyển đổi sang `InternalRequest`, sau đó xử lý bởi core manager.
 
 ```
-checkAuth(accountId)
-├── session.token tồn tại + session.tokenExpiresAt > now?
-│   └── ✅ return token (tái sử dụng)
-├── session.token tồn tại nhưng hết hạn?
-│   └── ❌ gọi login() → lưu token + expiresAt vào DB → return
-└── chưa có session?
-    └── ❌ gọi login() → lưu token + expiresAt vào DB → return
+Request đến → Adapter parse → InternalRequest → Core Manager → Provider → Response
+                                              ├── selectAccount
+                                              ├── checkAuth / login
+                                              ├── createSession
+                                              ├── hash-based cache (nếu dùng)
+                                              └── chat / chatStream
 ```
 
-- Token được cache trong memory (Map<accountId, string>) để tránh đọc DB
+## Auth: Token & Session
+
+### DeepSeek
+- Login bằng email + password từ account settings
+- Token được lưu trong `accounts.session` (JSON) + memory cache (`Map<accountId, string>`)
 - Token expiry: 24h từ lúc login
-- Fallback expiry: 24h nếu DeepSeek không trả về thời hạn
 
-## Chat Session: Per-Request
+### Qwen
+- Dùng token trực tiếp từ account settings (không cần login)
+- Token được truyền qua `Authorization: Bearer <token>`
 
-- **Chat session KHÔNG được share giữa các request** — mỗi request tạo chat session mới
-- Token mới được cache (DB + memory), chat session luôn fresh
+### ChatGPT
+- Đang phát triển (throw `not implemented yet`)
 
----
-
-## No Cache Flow
+## Session Reuse (Shared by cache & non-cache)
 
 ```
-POST /v1/chat/completions (apiKeyCache = false)
-  → selectAccount() → chọn account ngẫu nhiên
+sessionStore: Map<conversationId, SessionEntry>
+  SessionEntry {
+    providerSessionId: string     // ID session bên provider (DeepSeek/Qwen)
+    providerName: string          // deepseek | qwen | chatgpt
+    accountId: number             // Tài khoản nào được dùng
+    parentMessageId?: string      // ID message cuối từ provider
+    lastRequestMessageId?: string // ID message request cuối (cho hash cache)
+  }
+```
+
+## Hash-Based Cache Flow
+
+Cache dùng hash map thay vì lưu toàn bộ message array:
+
+1. Hash từng message role `user` | `tool` bằng MD5
+2. Hash map lưu trong DB (column `messages`) format: `{ hash → { parent_message_id, request_message_id } }`
+3. Khi request đến, duyệt message mới, tìm hash match trong map
+4. Xác định điểm phân kỳ (serial detection)
+5. Gửi message mới với `parent_message_id` phù hợp
+
+### Các trường hợp
+
+| Case | Mô tả | Hành vi |
+|------|-------|---------|
+| **Normal append** | Message mới nối cuối | Gửi từ message mới, dùng `last_message_id` làm parent |
+| **Revert** | User quay về message cũ | Phát hiện phân kỳ, dùng `parent_message_id` của hash cuối cùng match |
+| **Full match** | Tất cả message đã có trong cache | Gọi `edit_message` tại message cuối |
+
+### Tools caching
+
+- Cột `tools_hash` trong `conversations`: MD5 của tools array
+- Chỉ gửi tool system prompt khi `tools_hash` thay đổi
+- Tránh gửi lại toàn bộ tool definitions mỗi request
+
+### Cache Storage
+
+| Thời điểm | Stream | Non-stream |
+|-----------|--------|------------|
+| Lưu hash | Ngay khi nhận chunk đầu tiên | Sau khi nhận response |
+
+### last_used
+
+- Cột `last_used` được cập nhật mỗi lần conversation được dùng
+- Logic dọn dẹp dựa trên `last_used` thay vì `created_at`
+- Conversation chỉ bị xóa khi không dùng trong khoảng thời gian đã đặt
+
+### last_message_id
+
+- Cột `last_message_id` lưu ID message cuối cùng từ provider (assistant response)
+- Dùng làm `parent_message_id` cho message mới (không phải edit)
+- Đảm bảo chain message đúng ngay cả khi hash chỉ lưu role `user`/`tool`
+
+## No-Cache Flow
+
+```
+POST /v1/chat/completions (cache = false)
+  → Adapter parse → InternalRequest
+  → Route to provider (dựa trên model mapping)
+  → selectAccount() → chọn account ngẫu nhiên từ enabled
   → checkAuth() → token từ DB/memory hoặc login
-  → createChatSession() → client.createSession(token) → sessionId
-  → buildPrompt() → XML prompt từ messages
-  → getPow() → PoW mới
-  → client.chatCompletion(token, pow, payload) → SSE stream
-  → parse & format → response
+  → createSession() → provider.createSession()
+  → provider.chat() hoặc provider.chatStream()
+  → Adapter format → Response
 ```
 
----
+## Title Generation Request
 
-## Cache Flow
+Các coding tool (OpenCode, Claude Code, v.v.) luôn gửi thêm 1 request song song để tạo tiêu đề. Request này có ít messages hơn (thường msgs=2), không có `conversation_id`.
 
-```
-POST /v1/chat/completions (apiKeyCache = true)
-
-a) Có conversation_id trong request body:
-  → checkAuth() → token
-  → createChatSession() → sessionId mới (KHÔNG dùng lại session cũ)
-  → buildPrompt() → chỉ gửi diff messages
-  → getPow() → PoW mới
-  → client.chatCompletion(token, pow, payload) → SSE stream
-  → parse & format → response
-  → inject {conversation_id:xxx} vào reasoning chunk đầu tiên
-
-b) Không có conversation_id:
-  → checkAuth() → token
-  → createChatSession() → sessionId mới
-  → buildPrompt() → tất cả messages
-  → getPow() → PoW mới
-  → client.chatCompletion(token, pow, payload) → SSE stream
-  → lưu conversation vào DB + memory cache
-  → inject {conversation_id:xxx} vào reasoning chunk đầu tiên
-```
-
-## Known: Extra Title Generation Request
-
-Các coding tool (OpenCode, Claude Code, v.v.) luôn gửi thêm 1 request song song với request chat đầu tiên để tạo tiêu đề (title) cho cuộc hội thoại. Request này có ít messages hơn (thường msgs=2), không có `conversation_id`, và đến cùng lúc với request thật (msgs=3+).
-
-→ Backend sẽ tạo 2 DeepSeek session: 1 cho title, 1 cho chat thật. Đây là hành vi bình thường, **không phải bug**.
-
-Khi debug thấy nhiều conversation được tạo trên DeepSeek web, kiểm tra số lượng messages trong mỗi request để xác định đâu là title request.
+→ Backend sẽ tạo session riêng cho title request. Đây là hành vi bình thường, **không phải bug**.
 
 ## Compaction Detection
 
-**Không cần thiết.** Khi coding agent compact, nó tự thay thế message history → `conversation_id` cũ bị mất khỏi payload → request tiếp theo không có `conversationId` → luồng tự kích hoạt `isNew = true` → tạo conversation mới. Không cần implement logic detection phía backend.
+**Không cần implement.** Khi coding agent compact, nó tự thay thế message history → `conversation_id` cũ bị mất khỏi payload → request tiếp theo không có `conversationId` → luồng tự kích hoạt `isNew = true` → tạo session mới.

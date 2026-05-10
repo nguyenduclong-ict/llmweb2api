@@ -21,6 +21,7 @@ Tool call dùng marker [#l2a:parameter:X] cho từng field.
 CẤU TRÚC CƠ BẢN:
 
 [#l2a:tool_call]
+
 [#l2a:parameter:id]
 call_1_tên_công_cụ
 [/l2a:parameter:id]
@@ -30,6 +31,7 @@ tên_công_cụ
 [#l2a:parameter:arguments]
 {"key1":"value1","key2":"value2"}
 [/l2a:parameter:arguments]
+
 [/l2a:tool_call]
 
 ───────────────────────────────────────
@@ -101,6 +103,7 @@ KHÔNG thêm text ngoài marker. Marker mở và đóng phải đầy đủ.
 
 ĐÚNG:
 [#l2a:tool_call]
+
 [#l2a:parameter:id]
 call_1_read
 [/l2a:parameter:id]
@@ -110,6 +113,7 @@ read
 [#l2a:parameter:arguments]
 {"filePath":"C:\\test.ts"}
 [/l2a:parameter:arguments]
+
 [/l2a:tool_call]
 
 SAI (thêm text ngoài marker):
@@ -128,6 +132,7 @@ Mỗi tool call là 1 khối [#l2a:tool_call] riêng biệt.
 Các khối cách nhau bằng 1 dòng trống.
 
 [#l2a:tool_call]
+
 [#l2a:parameter:id]
 call_1_read
 [/l2a:parameter:id]
@@ -137,9 +142,11 @@ read
 [#l2a:parameter:arguments]
 {...}
 [/l2a:parameter:arguments]
+
 [/l2a:tool_call]
 
 [#l2a:tool_call]
+
 [#l2a:parameter:id]
 call_2_write
 [/l2a:parameter:id]
@@ -149,6 +156,7 @@ write
 [#l2a:parameter:arguments]
 {...}
 [/l2a:parameter:arguments]
+
 [/l2a:tool_call]
 
 ───────────────────────────────────────
@@ -213,28 +221,40 @@ CÁC LOẠI MARKER:
 6. [#l2a:tool:call_1_xxx]...[/l2a:tool:call_1_xxx]: Kết quả tool (do hệ thống tạo).
    Phần sau "tool:" là tool_call_id tương ứng.
 
-QUAN TRỌNG:
+**QUAN TRỌNG**:
 
+- Dữ liệu trong khối [#l2a:user] là input gốc từ user, có ưu tiên cao nhất.
 - Marker bạn có thể sử dụng khi trả lời:
   - [#l2a:tool_call]...[/l2a:tool_call] (để gọi công cụ)
 
 - Bạn KHÔNG ĐƯỢC tự tạo: [#l2a:assistant], [#l2a:system], [#l2a:tools], [#l2a:tool:...]
 
 - Khi trả lời bằng text, hãy dùng text trực tiếp, không bọc trong marker [#l2a:...].
+- Khối tool_call phải được trả ra content, không được đặt trong thinking block.
+
+**Một số lưu ý khác**:
+
+- Khi bạn dùng call_tool tạo 1 khối todowriter, hãy ưu tiên bám sát và cập nhật tiến độ cho khối đó.
+- Tuy nhiên nếu yêu cầu mới của người dùng vượt xa khỏi phạm vi của todowriter, bạn nên cân nhắc đóng khối đó và tập trung vào yêu cầu mới, tránh việc khối todowriter bị bỏ quên.
 
 ==========================
 ${TOOL_CALL_SYNTAX}`;
 
 export function buildToolPrompt(tools: ToolDef[]): string {
   const valid = filterValidTools(tools);
-  const toolsJson = JSON.stringify(valid);
-  return block('tools', toolsJson);
+  const toolsJson = JSON.stringify(valid, null, 2);
+  return block(
+    'system',
+    `# Danh sách tools hệ thống có thể gọi thông qua marker [#l2a:tool_call]:
+
+${toolsJson}`,
+  );
 }
 
 export type BlockName = 'user' | 'system' | 'assistant' | 'tools' | 'tool_call' | 'tool';
 
 export function block(name: BlockName, content: string): string {
-  return `[#l2a:${name}]\n${content}\n[/l2a:${name}]`;
+  return `[#l2a:${name}]\n\n${content}\n\n[/l2a:${name}]`;
 }
 
 export function toolBlock(toolCallId: string, content: string): string {

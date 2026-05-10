@@ -22,7 +22,12 @@ interface ApiKeyModalProps {
   onKeyGenerated?: (key: string) => void;
 }
 
-function ApiKeyForm({ editingKey, onSave, onCancel, onKeyGenerated }: {
+function ApiKeyForm({
+  editingKey,
+  onSave,
+  onCancel,
+  onKeyGenerated,
+}: {
   editingKey: ApiKey | null;
   onSave: (data: any) => Promise<ApiKey | void>;
   onCancel: () => void;

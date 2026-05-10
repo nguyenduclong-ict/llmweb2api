@@ -1,8 +1,15 @@
 import crypto from 'crypto';
 import type { Provider, SessionContext } from '../../types/provider';
-import type { InternalMessage, InternalRequest, InternalResponse, InternalStreamChunk } from '../../types/common';
+import type {
+  InternalMessage,
+  InternalRequest,
+  InternalResponse,
+  InternalStreamChunk,
+  ThinkingLevel,
+} from '../../types/common';
 import * as client from './client';
 import type { QwenFilePayload } from './types';
+import { FILE_UPLOAD_THRESHOLD } from './types';
 import { TOOL_SYSTEM_PROMPT, buildToolPrompt, block, toolBlock } from '../core/tool_prompt';
 import { parseToolCallXML } from '../core/tool_parser';
 import { ToolSieve } from '../core/tool_sieve';
@@ -22,6 +29,27 @@ class QwenProvider implements Provider {
   readonly name = 'qwen';
   private sentToolsHash = new Map<string, string>();
   private sentSystemPrompt = new Set<string>();
+  private sentConversationId = new Set<string>();
+  private conversationTokens = new Map<string, { inputTokens: number; outputTokens: number }>();
+
+  private accumulateTokens(
+    sessionId: string,
+    inputTokens: number,
+    outputTokens: number,
+  ): {
+    cumulativeInputTokens: number;
+    cumulativeOutputTokens: number;
+  } {
+    const prev = this.conversationTokens.get(sessionId) || { inputTokens: 0, outputTokens: 0 };
+    prev.inputTokens += inputTokens;
+    prev.outputTokens += outputTokens;
+    this.conversationTokens.set(sessionId, prev);
+    console.log(
+      `[QWEN] tokens session=${sessionId.slice(0, 12)} reqIn=${inputTokens} reqOut=${outputTokens} ` +
+        `cumIn=${prev.inputTokens} cumOut=${prev.outputTokens}`,
+    );
+    return { cumulativeInputTokens: prev.inputTokens, cumulativeOutputTokens: prev.outputTokens };
+  }
 
   async login(settings: Record<string, unknown>): Promise<SessionContext> {
     const token = settings.token as string;
@@ -40,6 +68,7 @@ class QwenProvider implements Provider {
     const { content, files } = await this.buildPromptAndFiles(ctx, request);
     const parentId = ctx.metadata.parentMessageId as string | null;
     const model = request.providerModel || request.model;
+    const thinkingMode = request.thinkingLevel;
 
     let text = '';
     let reasoning = '';
@@ -53,6 +82,8 @@ class QwenProvider implements Provider {
       content,
       't2t',
       files,
+      undefined,
+      thinkingMode,
     )) {
       const parsed = parseStreamLine(line);
       if (!parsed) continue;
@@ -89,6 +120,12 @@ class QwenProvider implements Provider {
 
     const inputTokens = Math.ceil(content.length / 4);
     const outputTokens = Math.ceil(text.length / 4);
+    const cumulative = this.accumulateTokens(ctx.sessionId, inputTokens, outputTokens);
+
+    if (reasoning && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
+      reasoning = `#conversation_id:${ctx.metadata.conversationId}\n` + reasoning;
+      this.sentConversationId.add(ctx.sessionId);
+    }
 
     return {
       id: `qwen-${Date.now()}`,
@@ -104,7 +141,7 @@ class QwenProvider implements Provider {
               function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
             }))
           : undefined,
-      usage: { inputTokens, outputTokens },
+      usage: { inputTokens, outputTokens, ...cumulative },
     };
   }
 
@@ -114,12 +151,186 @@ class QwenProvider implements Provider {
     signal?: AbortSignal,
   ): AsyncGenerator<InternalStreamChunk> {
     if (signal?.aborted) return;
+    const editMessageId = ctx.metadata.editMessageId as string | undefined;
+    const model = request.providerModel || request.model;
+    const streamId = `qwen-${Date.now()}`;
+
+    const thinkingMode = request.thinkingLevel;
+
+    if (editMessageId) {
+      const parentId = ctx.metadata.parentMessageId as string | undefined;
+      const editFiles: QwenFilePayload[] = [];
+      const lastMsg = request.messages[request.messages.length - 1];
+      const editContent = messageContent(lastMsg);
+
+      let totalOutputTokens = 0;
+      let hasToolCalls = false;
+      let toolCallIndex = 0;
+      let tcCallId = '';
+      let tcName = '';
+      const sieve = new ToolSieve();
+      let firstChunk = true;
+
+      try {
+        for await (const line of client.streamEditMessage(
+          ctx.token,
+          ctx.sessionId,
+          model,
+          parentId ?? null,
+          editContent,
+          editFiles,
+          signal,
+          thinkingMode,
+        )) {
+          if (signal?.aborted) return;
+          const parsed = parseStreamLine(line);
+          if (!parsed) continue;
+          try {
+            const chunk = JSON.parse(parsed);
+            const streamError = getStreamError(chunk);
+            if (streamError) throw new Error(streamError);
+            const created = getCreatedResponse(chunk);
+            if (created) {
+              ctx.metadata.parentMessageId = created.response_id;
+              ctx.metadata.lastResponseMessageId = created.response_id;
+              continue;
+            }
+            const delta = chunk?.choices?.[0]?.delta;
+            if (!delta && !hasResponseEvent(chunk)) continue;
+
+            if (firstChunk && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
+              yield {
+                id: streamId,
+                model: request.model,
+                content: '',
+                reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
+                finishReason: null,
+              };
+              this.sentConversationId.add(ctx.sessionId);
+            }
+            firstChunk = false;
+
+            const thinkingText = extractThinkingContent(chunk, delta);
+            if (thinkingText) {
+              yield {
+                id: streamId,
+                model: request.model,
+                content: '',
+                reasoningContent: thinkingText,
+                finishReason: null,
+              };
+            }
+
+            const contentText = extractAnswerContent(chunk, delta);
+            if (contentText) {
+              for (const ev of sieve.processChunk(contentText)) {
+                if (ev.type === 'content' && hasText(ev.text)) {
+                  totalOutputTokens += Math.ceil(ev.text.length / 4);
+                  yield { id: streamId, model: request.model, content: ev.text, finishReason: null };
+                } else if (ev.type === 'tool_call_start') {
+                  hasToolCalls = true;
+                  toolCallIndex++;
+                  tcCallId = '';
+                  tcName = '';
+                } else if (ev.type === 'tool_call_field_delta') {
+                  if (ev.field === 'id') tcCallId += ev.text || '';
+                  else if (ev.field === 'name') tcName += ev.text || '';
+                  else if (ev.field === 'arguments' || ev.field?.startsWith('arguments')) {
+                    totalOutputTokens += Math.ceil((ev.text || '').length / 4);
+                    yield {
+                      id: streamId,
+                      model: request.model,
+                      content: '',
+                      toolCallDelta: { index: toolCallIndex - 1, function: { arguments: ev.text } },
+                      finishReason: null,
+                    };
+                  }
+                } else if (ev.type === 'tool_call_field_end' && ev.field === 'name') {
+                  const callId = tcCallId || `call_${streamId}_${toolCallIndex - 1}_${tcName}`;
+                  totalOutputTokens += Math.ceil(tcName.length / 4);
+                  yield {
+                    id: streamId,
+                    model: request.model,
+                    content: '',
+                    toolCallDelta: {
+                      index: toolCallIndex - 1,
+                      id: callId,
+                      type: 'function',
+                      function: { name: tcName, arguments: '' },
+                    },
+                    finishReason: null,
+                  };
+                }
+              }
+            }
+          } catch {
+            continue;
+          }
+        }
+      } finally {
+        if (signal?.aborted && ctx.metadata.lastResponseMessageId) {
+          client.stopStream(ctx.token, ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
+        }
+      }
+
+      if (signal?.aborted) return;
+
+      for (const ev of sieve.flush()) {
+        if (ev.type === 'content' && hasText(ev.text)) {
+          totalOutputTokens += Math.ceil(ev.text.length / 4);
+          yield { id: streamId, model: request.model, content: ev.text, finishReason: null };
+        } else if (ev.type === 'tool_call_start') {
+          hasToolCalls = true;
+          toolCallIndex++;
+          tcCallId = '';
+          tcName = '';
+        } else if (ev.type === 'tool_call_field_delta') {
+          if (ev.field === 'id') tcCallId += ev.text || '';
+          else if (ev.field === 'name') tcName += ev.text || '';
+          else if (ev.field === 'arguments' || ev.field?.startsWith('arguments')) {
+            totalOutputTokens += Math.ceil((ev.text || '').length / 4);
+            yield {
+              id: streamId,
+              model: request.model,
+              content: '',
+              toolCallDelta: { index: toolCallIndex - 1, function: { arguments: ev.text } },
+              finishReason: null,
+            };
+          }
+        } else if (ev.type === 'tool_call_field_end' && ev.field === 'name') {
+          const callId = tcCallId || `call_${streamId}_${toolCallIndex - 1}_${tcName}`;
+          totalOutputTokens += Math.ceil(tcName.length / 4);
+          yield {
+            id: streamId,
+            model: request.model,
+            content: '',
+            toolCallDelta: {
+              index: toolCallIndex - 1,
+              id: callId,
+              type: 'function',
+              function: { name: tcName, arguments: '' },
+            },
+            finishReason: null,
+          };
+        }
+      }
+
+      const editInputTokens = Math.ceil(editContent.length / 4);
+      const editCumulative = this.accumulateTokens(ctx.sessionId, editInputTokens, totalOutputTokens);
+      yield {
+        id: streamId,
+        model: request.model,
+        content: '',
+        finishReason: hasToolCalls ? 'tool_calls' : 'stop',
+        usage: { inputTokens: editInputTokens, outputTokens: totalOutputTokens, ...editCumulative },
+      };
+      return;
+    }
+
     const { content, files } = await this.buildPromptAndFiles(ctx, request);
     if (signal?.aborted) return;
 
     const parentId = ctx.metadata.parentMessageId as string | null;
-    const model = request.providerModel || request.model;
-    const streamId = `qwen-${Date.now()}`;
     let totalOutputTokens = 0;
     let hasToolCalls = false;
     let toolCallIndex = 0;
@@ -127,84 +338,111 @@ class QwenProvider implements Provider {
     let tcName = '';
     const debugSamples: string[] = [];
     let rawLineCount = 0;
+    let firstChunk = true;
     const sieve = new ToolSieve();
 
-    for await (const line of client.streamCompletion(
-      ctx.token,
-      ctx.sessionId,
-      model,
-      parentId,
-      content,
-      't2t',
-      files,
-      signal,
-    )) {
-      if (signal?.aborted) return;
-      rawLineCount++;
-      if (debugSamples.length < 8) debugSamples.push(line.slice(0, 500));
-      const parsed = parseStreamLine(line);
-      if (!parsed) continue;
-      try {
-        const chunk = JSON.parse(parsed);
-        const streamError = getStreamError(chunk);
-        if (streamError) throw new Error(streamError);
-        const created = getCreatedResponse(chunk);
-        if (created) {
-          ctx.metadata.parentMessageId = created.response_id;
-          continue;
-        }
-        const delta = chunk?.choices?.[0]?.delta;
-        if (!delta && !hasResponseEvent(chunk)) continue;
+    try {
+      for await (const line of client.streamCompletion(
+        ctx.token,
+        ctx.sessionId,
+        model,
+        parentId,
+        content,
+        't2t',
+        files,
+        signal,
+        thinkingMode,
+      )) {
+        if (signal?.aborted) return;
+        rawLineCount++;
+        if (debugSamples.length < 8) debugSamples.push(line.slice(0, 500));
+        const parsed = parseStreamLine(line);
+        if (!parsed) continue;
+        try {
+          const chunk = JSON.parse(parsed);
+          const streamError = getStreamError(chunk);
+          if (streamError) throw new Error(streamError);
+          const created = getCreatedResponse(chunk);
+          if (created) {
+            ctx.metadata.parentMessageId = created.response_id;
+            ctx.metadata.lastResponseMessageId = created.response_id;
+            continue;
+          }
+          const delta = chunk?.choices?.[0]?.delta;
+          if (!delta && !hasResponseEvent(chunk)) continue;
 
-        const thinkingText = extractThinkingContent(chunk, delta);
-        if (thinkingText) {
-          yield { id: streamId, model: request.model, content: '', reasoningContent: thinkingText, finishReason: null };
-        }
+          if (firstChunk && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
+            yield {
+              id: streamId,
+              model: request.model,
+              content: '',
+              reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
+              finishReason: null,
+            };
+            this.sentConversationId.add(ctx.sessionId);
+          }
+          firstChunk = false;
 
-        const contentText = extractAnswerContent(chunk, delta);
-        if (contentText) {
-          for (const ev of sieve.processChunk(contentText)) {
-            if (ev.type === 'content' && hasText(ev.text)) {
-              totalOutputTokens += Math.ceil(ev.text.length / 4);
-              yield { id: streamId, model: request.model, content: ev.text, finishReason: null };
-            } else if (ev.type === 'tool_call_start') {
-              hasToolCalls = true;
-              toolCallIndex++;
-              tcCallId = '';
-              tcName = '';
-            } else if (ev.type === 'tool_call_field_delta') {
-              if (ev.field === 'id') tcCallId += ev.text || '';
-              else if (ev.field === 'name') tcName += ev.text || '';
-              else if (ev.field === 'arguments' || ev.field?.startsWith('arguments')) {
-                totalOutputTokens += Math.ceil((ev.text || '').length / 4);
+          const thinkingText = extractThinkingContent(chunk, delta);
+          if (thinkingText) {
+            yield {
+              id: streamId,
+              model: request.model,
+              content: '',
+              reasoningContent: thinkingText,
+              finishReason: null,
+            };
+          }
+
+          const contentText = extractAnswerContent(chunk, delta);
+          if (contentText) {
+            for (const ev of sieve.processChunk(contentText)) {
+              if (ev.type === 'content' && hasText(ev.text)) {
+                totalOutputTokens += Math.ceil(ev.text.length / 4);
+                yield { id: streamId, model: request.model, content: ev.text, finishReason: null };
+              } else if (ev.type === 'tool_call_start') {
+                hasToolCalls = true;
+                toolCallIndex++;
+                tcCallId = '';
+                tcName = '';
+              } else if (ev.type === 'tool_call_field_delta') {
+                if (ev.field === 'id') tcCallId += ev.text || '';
+                else if (ev.field === 'name') tcName += ev.text || '';
+                else if (ev.field === 'arguments' || ev.field?.startsWith('arguments')) {
+                  totalOutputTokens += Math.ceil((ev.text || '').length / 4);
+                  yield {
+                    id: streamId,
+                    model: request.model,
+                    content: '',
+                    toolCallDelta: { index: toolCallIndex - 1, function: { arguments: ev.text } },
+                    finishReason: null,
+                  };
+                }
+              } else if (ev.type === 'tool_call_field_end' && ev.field === 'name') {
+                const callId = tcCallId || `call_${streamId}_${toolCallIndex - 1}_${tcName}`;
+                totalOutputTokens += Math.ceil(tcName.length / 4);
                 yield {
                   id: streamId,
                   model: request.model,
                   content: '',
-                  toolCallDelta: { index: toolCallIndex - 1, function: { arguments: ev.text } },
+                  toolCallDelta: {
+                    index: toolCallIndex - 1,
+                    id: callId,
+                    type: 'function',
+                    function: { name: tcName, arguments: '' },
+                  },
                   finishReason: null,
                 };
               }
-            } else if (ev.type === 'tool_call_field_end' && ev.field === 'name') {
-              const callId = tcCallId || `call_${streamId}_${toolCallIndex - 1}_${tcName}`;
-              totalOutputTokens += Math.ceil(tcName.length / 4);
-              yield {
-                id: streamId,
-                model: request.model,
-                content: '',
-                toolCallDelta: {
-                  index: toolCallIndex - 1,
-                  id: callId,
-                  type: 'function',
-                  function: { name: tcName, arguments: '' },
-                },
-                finishReason: null,
-              };
             }
           }
+        } catch {
+          continue;
         }
-      } catch {
-        continue;
+      }
+    } finally {
+      if (signal?.aborted && ctx.metadata.lastResponseMessageId) {
+        client.stopStream(ctx.token, ctx.sessionId, ctx.metadata.lastResponseMessageId as string);
       }
     }
 
@@ -251,6 +489,7 @@ class QwenProvider implements Provider {
     }
 
     const inputTokens = Math.ceil(content.length / 4);
+    const cumulative = this.accumulateTokens(ctx.sessionId, inputTokens, totalOutputTokens);
     if (totalOutputTokens === 0 && !hasToolCalls) {
       console.warn(
         `[QWEN] Stream ended without output: rawLines=${rawLineCount} samples=${JSON.stringify(debugSamples)}`,
@@ -261,13 +500,15 @@ class QwenProvider implements Provider {
       model: request.model,
       content: '',
       finishReason: hasToolCalls ? 'tool_calls' : 'stop',
-      usage: { inputTokens, outputTokens: totalOutputTokens },
+      usage: { inputTokens, outputTokens: totalOutputTokens, ...cumulative },
     };
   }
 
   async dispose(ctx: SessionContext): Promise<void> {
     this.sentSystemPrompt.delete(ctx.sessionId);
     this.sentToolsHash.delete(ctx.sessionId);
+    this.sentConversationId.delete(ctx.sessionId);
+    this.conversationTokens.delete(ctx.sessionId);
     if (!ctx.sessionId) return;
     try {
       await client.deleteSession(ctx.token, ctx.sessionId);
@@ -285,9 +526,9 @@ class QwenProvider implements Provider {
     const tools = request.tools as ToolDef[] | undefined;
     const hasTools = !!(tools && tools.length > 0);
     const sessionId = ctx.sessionId;
+    const isRestoredSession = ctx.metadata.isRestoredSession === true;
 
-    const lastMsg = messages[messages.length - 1];
-    const imageRefs = extractImageRefs(lastMsg);
+    const imageRefs = extractImageRefsAll(messages as Array<{ role: string; content: unknown }>);
     if (imageRefs.length > 0 && MODELS_WITHOUT_IMAGE.has(model)) {
       throw new Error(`Model ${model} does not support image input`);
     }
@@ -324,29 +565,94 @@ class QwenProvider implements Provider {
       }
     }
 
-    const isNewConversation = !this.sentSystemPrompt.has(sessionId);
-    const topParts: string[] = [];
+    const isNewConversation = !isRestoredSession && !this.sentSystemPrompt.has(sessionId);
 
+    if (isRestoredSession) {
+      this.sentSystemPrompt.add(sessionId);
+    }
+
+    let toolsChanged = false;
+    let toolsFileContent: string | null = null;
     if (hasTools) {
       const toolsHash = crypto.createHash('md5').update(JSON.stringify(tools)).digest('hex');
       const prevHash = this.sentToolsHash.get(sessionId);
-      const toolsChanged = !prevHash || toolsHash !== prevHash;
-      if (toolsChanged) {
+      if (isRestoredSession && prevHash === undefined) {
         this.sentToolsHash.set(sessionId, toolsHash);
-        if (isNewConversation) topParts.push(TOOL_SYSTEM_PROMPT);
-        topParts.push(buildToolPrompt(tools!));
+      } else {
+        toolsChanged = !prevHash || toolsHash !== prevHash;
+        if (toolsChanged) {
+          this.sentToolsHash.set(sessionId, toolsHash);
+        }
       }
     }
 
-    const messageXml = messages
-      .filter((m) => isNewConversation || m.role !== 'assistant')
-      .map((m) => renderMessageBlock(m as InternalMessage))
-      .join('\n\n');
-
-    const prompt = [...topParts, messageXml].join('\n\n');
-
-    if (isNewConversation) {
+    if (isNewConversation || toolsChanged) {
       this.sentSystemPrompt.add(sessionId);
+      const parts: string[] = [TOOL_SYSTEM_PROMPT];
+      if (hasTools) {
+        parts.push(buildToolPrompt(tools!));
+      }
+      toolsFileContent = parts.join('\n\n');
+    }
+
+    const messageXml = isNewConversation
+      ? messages.map((m) => renderMessageBlock(m as InternalMessage)).join('\n\n')
+      : messages
+          .filter((m) => m.role !== 'assistant')
+          .map((m) => renderMessageBlock(m as InternalMessage))
+          .join('\n\n');
+
+    let prompt: string;
+
+    let toolFileInstruction = '';
+    if (toolsFileContent) {
+      const toolFilename = `${this.name}_tools_${Date.now()}.txt`;
+      const filePayload = await client.uploadFile(ctx.token, {
+        filename: toolFilename,
+        mimeType: 'text/plain',
+        bytes: new TextEncoder().encode(toolsFileContent),
+      });
+      uploadedFiles.push(filePayload);
+      toolFileInstruction = block(
+        'system',
+        `Please read the attached file (${toolFilename}) to understand the context.`,
+      );
+    }
+
+    const fullPrompt = [toolFileInstruction, messageXml].filter(Boolean).join('\n\n');
+
+    if (fullPrompt.length >= FILE_UPLOAD_THRESHOLD) {
+      console.log(
+        `[QWEN] prompt size=${fullPrompt.length} >= threshold=${FILE_UPLOAD_THRESHOLD}, uploading history as file`,
+      );
+      const filename = `${this.name}_${Date.now()}.txt`;
+
+      const fileContent = isNewConversation
+        ? messages
+            .slice(0, -1)
+            .map((m) => renderMessageBlock(m as InternalMessage))
+            .join('\n\n') || '(empty history)'
+        : '(Previous context is maintained by the chat session. See inline messages below for the current request.)';
+
+      const inlineXml = isNewConversation
+        ? renderMessageBlock(messages[messages.length - 1] as InternalMessage)
+        : messageXml;
+
+      const filePayload = await client.uploadFile(ctx.token, {
+        filename,
+        mimeType: 'text/plain',
+        bytes: new TextEncoder().encode(fileContent),
+      });
+      uploadedFiles.push(filePayload);
+
+      const fileParts = [
+        toolFileInstruction,
+        block('system', `Please read the attached file (${filename}) to understand the context.`),
+        inlineXml,
+      ];
+      prompt = fileParts.filter(Boolean).join('\n\n');
+    } else {
+      prompt = fullPrompt;
     }
 
     return { content: prompt, files: uploadedFiles };
@@ -460,20 +766,22 @@ function messageContent(msg: InternalMessage): string {
   return '';
 }
 
-function extractImageRefs(msg: InternalMessage): ImageRef[] {
-  if (typeof msg.content !== 'object' || !Array.isArray(msg.content)) return [];
+function extractImageRefsAll(messages: Array<{ role: string; content: unknown }>): ImageRef[] {
   const refs: ImageRef[] = [];
-  for (const block of msg.content) {
-    if (block.type === 'image_url') {
-      const imageUrl = (block as unknown as Record<string, unknown>).image_url as Record<string, unknown> | undefined;
-      const url = imageUrl?.url as string | undefined;
-      if (url) {
-        const isDataUrl = url.startsWith('data:');
-        refs.push({
-          url,
-          isDataUrl,
-          mimeType: isDataUrl ? url.match(/data:(.+);base64/)?.[1] || 'image/png' : undefined,
-        });
+  for (const msg of messages) {
+    if (typeof msg.content !== 'object' || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content as Array<Record<string, unknown>>) {
+      if (block.type === 'image_url') {
+        const imageUrl = block.image_url as Record<string, unknown> | undefined;
+        const url = imageUrl?.url as string | undefined;
+        if (url) {
+          const isDataUrl = url.startsWith('data:');
+          refs.push({
+            url,
+            isDataUrl,
+            mimeType: isDataUrl ? url.match(/data:(.+);base64/)?.[1] || 'image/png' : undefined,
+          });
+        }
       }
     }
   }

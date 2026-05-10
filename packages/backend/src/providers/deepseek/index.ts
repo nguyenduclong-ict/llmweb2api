@@ -736,17 +736,13 @@ class DeepSeekProvider implements Provider {
       this.sentSystemPrompt.add(sessionId);
     }
 
-    // Top section: TOOL_SYSTEM_PROMPT + (optional) tools block
-    // Inject system prompt only on new conversation or when tools change
-    const topParts: string[] = [];
-
+    // Build tool system prompt content (only when new conversation or tools changed)
     let toolsChanged = false;
+    let toolsFileContent: string | null = null;
     if (hasTools) {
       const toolsHash = crypto.createHash('md5').update(JSON.stringify(tools)).digest('hex');
       const prevHash = this.sentToolsHash.get(sessionId);
       if (isRestoredSession && prevHash === undefined) {
-        // Sau restart, sentToolsHash bị mất. Seed lại từ request hiện tại
-        // mà không coi là toolsChanged — session đã có tools từ trước.
         this.sentToolsHash.set(sessionId, toolsHash);
       } else {
         toolsChanged = forceTools || toolsHash !== prevHash;
@@ -758,11 +754,11 @@ class DeepSeekProvider implements Provider {
 
     if (isNewConversation || toolsChanged) {
       this.sentSystemPrompt.add(sessionId);
-      topParts.push(TOOL_SYSTEM_PROMPT);
-    }
-
-    if (hasTools && toolsChanged) {
-      topParts.push(buildToolPrompt(tools!));
+      const parts: string[] = [TOOL_SYSTEM_PROMPT];
+      if (hasTools) {
+        parts.push(buildToolPrompt(tools!));
+      }
+      toolsFileContent = parts.join('\n\n');
     }
 
     // Message section: on new conversation send all messages (assistant included).
@@ -777,7 +773,22 @@ class DeepSeekProvider implements Provider {
     let prompt: string;
     const fileIds: string[] = [];
 
-    const fullPrompt = [...topParts, messageXml].join('\n\n');
+    // Upload tool system prompt as file if present
+    let toolFileInstruction = '';
+    if (toolsFileContent) {
+      const toolFilename = `${this.name}_tools_${Date.now()}.txt`;
+      const uploadResult = await client.uploadFile(token, toolFilename, toolsFileContent);
+      this.uploadedFileIds.push(uploadResult.id);
+      fileIds.push(uploadResult.id);
+      await client.pollFileReady(token, uploadResult.id);
+      toolFileInstruction = block(
+        'system',
+        `Please read the attached file (${toolFilename}) to understand the context.`,
+      );
+    }
+
+    // Build full prompt with message content only (tool prompt moved to file)
+    const fullPrompt = [toolFileInstruction, messageXml].filter(Boolean).join('\n\n');
 
     if (fullPrompt.length >= FILE_UPLOAD_THRESHOLD) {
       console.log(
@@ -789,16 +800,12 @@ class DeepSeekProvider implements Provider {
       let inlineXml: string;
 
       if (isNewConversation) {
-        // New conversation: API chưa có history. Đưa tất cả messages TRỪ message cuối vào file,
-        // message cuối cùng nằm trong prompt inline (tránh duplicate).
         const lastMsg = messages[messages.length - 1];
         const historyMsgs = messages.slice(0, -1);
         fileContent =
           historyMsgs.map((m) => renderMessageBlock(m as InternalMessage)).join('\n\n') || '(empty history)';
         inlineXml = renderMessageBlock(lastMsg as InternalMessage);
       } else {
-        // Có cache: API đã có history stateful. Không cần gửi lại context cũ.
-        // Tất cả message trong request đều là message mới → nằm trong prompt inline.
         fileContent =
           '(Previous context is maintained by the chat session. See inline messages below for the current request.)';
         inlineXml = messageXml;
@@ -810,11 +817,11 @@ class DeepSeekProvider implements Provider {
       await client.pollFileReady(token, uploadResult.id);
 
       const fileParts = [
-        ...topParts,
+        toolFileInstruction,
         block('system', `Please read the attached file (${filename}) to understand the context.`),
         inlineXml,
       ];
-      prompt = fileParts.join('\n\n');
+      prompt = fileParts.filter(Boolean).join('\n\n');
     } else {
       console.log(`[DEEPSEEK] prompt size=${fullPrompt.length} < threshold=${FILE_UPLOAD_THRESHOLD}, inline`);
       prompt = fullPrompt;

@@ -8,7 +8,7 @@ import {
   getAllProviderModels as getAllQwenModels,
 } from '../../providers/qwen/models';
 import type { ProviderModelMeta } from '../../providers/deepseek/models';
-import type { ResolvedModel } from '../../types/common';
+import type { ResolvedModel, ThinkingLevel } from '../../types/common';
 
 export type AdapterName = 'openai' | 'anthropic' | 'gemini';
 
@@ -66,19 +66,39 @@ export function getModelMapJson(adapter: AdapterName): ModelMap {
 export function resolveModel(
   adapter: AdapterName,
   vendorModel: string,
-  options?: { thinking?: boolean },
+  options?: { thinking?: boolean; thinkingLevel?: ThinkingLevel },
+): ResolvedModel;
+export function resolveModel(
+  adapter: AdapterName,
+  vendorModel: string,
+  thinking?: boolean,
+  thinkingLevel?: ThinkingLevel,
+): ResolvedModel;
+export function resolveModel(
+  adapter: AdapterName,
+  vendorModel: string,
+  arg3?: boolean | { thinking?: boolean; thinkingLevel?: ThinkingLevel },
+  arg4?: ThinkingLevel,
 ): ResolvedModel {
+  let thinkingOverride: boolean | undefined;
+  let thinkingLevelOverride: ThinkingLevel | undefined;
+
+  if (typeof arg3 === 'object' && arg3 !== null) {
+    thinkingOverride = arg3.thinking;
+    thinkingLevelOverride = arg3.thinkingLevel;
+  } else {
+    thinkingOverride = arg3;
+    thinkingLevelOverride = arg4;
+  }
   const map = getModelMap(adapter);
   let providerModel = map[vendorModel];
 
   if (!providerModel) {
-    // Try case-insensitive match in model map
     const lowerModel = vendorModel.toLowerCase();
     const matchKey = Object.keys(map).find((k) => k.toLowerCase() === lowerModel);
     if (matchKey) {
       providerModel = map[matchKey];
     } else if (getDeepSeekModelMeta(vendorModel) || getQwenModelMeta(vendorModel)) {
-      // vendorModel is already a valid provider model
       providerModel = vendorModel;
     } else {
       providerModel = 'deepseek-v4-flash';
@@ -93,8 +113,11 @@ export function resolveModel(
     };
 
   let thinking = meta.thinking === 'on' || meta.thinking === 'toggleable';
-  if (meta.thinking === 'toggleable' && options?.thinking === false) {
+  if (meta.thinking === 'toggleable' && thinkingOverride === false) {
     thinking = false;
+  }
+  if (meta.thinking === 'toggleable' && thinkingOverride === true) {
+    thinking = true;
   }
 
   return {
@@ -104,6 +127,7 @@ export function resolveModel(
     responseModel: vendorModel,
     thinking,
     search: meta.search,
+    thinkingLevel: thinkingLevelOverride,
   };
 }
 

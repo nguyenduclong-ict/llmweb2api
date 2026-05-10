@@ -4,7 +4,8 @@ import path from 'path';
 import { authMiddleware } from '../middleware/auth';
 import { loggerMiddleware } from '../middleware/logger';
 import { rateLimitMiddleware } from '../middleware/rateLimit';
-import { openaiAdapter, openaiResponsesAdapter } from '../../adapters/openai';
+import { openaiAdapter } from '../../adapters/openai';
+import { openaiResponsesAdapter } from '../../adapters/openai/responses';
 import { anthropicAdapter } from '../../adapters/anthropic';
 import { geminiAdapter } from '../../adapters/gemini';
 import { processChat, processChatStream } from '../../providers/core/manager';
@@ -201,7 +202,9 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
         let firstChunk = true;
         let outputText = '';
         let lastChunk;
+        let toolCallOutputIndex = 1;
         const streamedToolCalls = new Map<number, ToolCall>();
+        const emittedOutputItems = new Set<number>();
         safeWrite(res, openaiResponsesAdapter.formatStreamStart(responseId, internalReq.model));
 
         for await (const chunk of stream) {
@@ -216,6 +219,7 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
           }
           if (chunk.toolCallDelta) {
             const index = chunk.toolCallDelta.index;
+            const isNew = !streamedToolCalls.has(index);
             const existing =
               streamedToolCalls.get(index) ??
               ({
@@ -230,6 +234,30 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
               existing.function.arguments += chunk.toolCallDelta.function.arguments;
             }
             streamedToolCalls.set(index, existing);
+
+            if (isNew && existing.id) {
+              const oi = toolCallOutputIndex++;
+              safeWrite(
+                res,
+                openaiResponsesAdapter.formatOutputItemAdded(oi, {
+                  id: existing.id,
+                  type: 'function_call',
+                  status: 'in_progress',
+                  call_id: existing.id,
+                  name: existing.function.name || '',
+                  arguments: '',
+                }),
+              );
+              emittedOutputItems.add(index);
+            }
+
+            if (chunk.toolCallDelta.function?.arguments) {
+              const sseData = openaiResponsesAdapter.formatFunctionCallArgumentsDelta(
+                existing.id,
+                chunk.toolCallDelta.function.arguments,
+              );
+              if (sseData && !safeWrite(res, sseData)) break;
+            }
           }
 
           const sseData = openaiResponsesAdapter.formatStreamChunk(chunk, responseId);

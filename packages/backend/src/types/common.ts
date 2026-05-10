@@ -49,6 +49,8 @@ export interface InternalMessage {
   tool_call_id?: string;
 }
 
+export type ThinkingLevel = 'Auto' | 'Fast' | 'Thinking';
+
 export interface InternalRequest {
   model: string;
   providerModel?: string;
@@ -63,6 +65,8 @@ export interface InternalRequest {
   toolChoice?: unknown;
   reasoningEffort?: string;
   conversationId?: string;
+  thinkingLevel?: ThinkingLevel;
+  reasoning?: unknown;
 }
 
 export interface InternalResponse {
@@ -108,4 +112,5 @@ export interface ResolvedModel {
   responseModel: string;
   thinking: boolean;
   search: boolean;
+  thinkingLevel?: ThinkingLevel;
 }

@@ -42,9 +42,7 @@ export const anthropicAdapter: Adapter = {
 
   parseRequest(body: any): InternalRequest {
     const vendorModel = body.model ?? 'claude-3-opus-20240229';
-    const resolved = resolveModel('anthropic', vendorModel, {
-      thinking: claudeThinkingToFlag(body.thinking),
-    });
+    const resolved = resolveModel('anthropic', vendorModel, claudeThinkingToFlag(body.thinking));
 
     const messages: InternalMessage[] = [];
 

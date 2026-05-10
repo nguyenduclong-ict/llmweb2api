@@ -3,7 +3,10 @@ export const QWEN_BASE_URL = 'https://chat.qwen.ai';
 export const QWEN_API_URLS = {
   chatsNew: `${QWEN_BASE_URL}/api/v2/chats/new`,
   chatCompletions: `${QWEN_BASE_URL}/api/v2/chat/completions`,
+  chatCompletionsStop: `${QWEN_BASE_URL}/api/v2/chat/completions/stop`,
 };
+
+export const FILE_UPLOAD_THRESHOLD = 100 * 1024;
 
 export const BAXIA_VERSION = '2.5.36';
 

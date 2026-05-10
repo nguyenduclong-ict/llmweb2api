@@ -46,11 +46,11 @@ export default function TokenUsageChart({ startDate, endDate, granularity }: Pro
   const tickFormatter = useMemo(() => (value: string) => formatTick(value, granularity), [granularity]);
 
   return (
-    <ResponsiveContainer width='100%' height={300}>
+    <ResponsiveContainer width="100%" height={300}>
       <LineChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-        <CartesianGrid strokeDasharray='3 3' className='stroke-muted' />
+        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
         <XAxis
-          dataKey='date'
+          dataKey="date"
           tick={{ fontSize: 12 }}
           interval={Math.max(0, Math.floor(data.length / 8) - 1)}
           tickFormatter={tickFormatter}
@@ -58,8 +58,15 @@ export default function TokenUsageChart({ startDate, endDate, granularity }: Pro
         <YAxis tick={{ fontSize: 12 }} />
         <Tooltip content={<CustomChartTooltip />} />
         <Legend />
-        <Line type='monotone' dataKey='inputTokens' name='Input Tokens' stroke='#8b5cf6' strokeWidth={2} dot={false} />
-        <Line type='monotone' dataKey='outputTokens' name='Output Tokens' stroke='#ec4899' strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="inputTokens" name="Input Tokens" stroke="#8b5cf6" strokeWidth={2} dot={false} />
+        <Line
+          type="monotone"
+          dataKey="outputTokens"
+          name="Output Tokens"
+          stroke="#ec4899"
+          strokeWidth={2}
+          dot={false}
+        />
       </LineChart>
     </ResponsiveContainer>
   );

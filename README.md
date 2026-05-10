@@ -1,39 +1,40 @@
 # llmweb2api
 
-Biến tài khoản DeepSeek Chat (web) thành OpenAI API để dùng với **OpenCode**.
+Biến tài khoản chat web (DeepSeek, Qwen, ChatGPT) thành API tương thích OpenAI / Anthropic / Gemini.
 
 ## Mục tiêu
 
-DeepSeek cung cấp giao diện chat miễn phí tại [chat.deepseek.com](https://chat.deepseek.com) nhưng không có API công khai. Dự án này hoạt động như một proxy trung gian, cho phép OpenCode (và các công cụ tương thích OpenAI API) sử dụng tài khoản DeepSeek web làm backend:
+Nhiều nền tảng AI cung cấp giao diện chat miễn phí nhưng không có API công khai. Dự án này hoạt động như một proxy trung gian, cho phép các công cụ (OpenCode, Cursor, Continue, v.v.) sử dụng tài khoản web làm backend:
 
 ```
-OpenCode (OpenAI API)
+Coding Agent (OpenAI / Anthropic / Gemini API)
         │
         ▼
   llmweb2api (port 3000)
-  - Định dạng OpenAI
-  - Quản lý session, cache, tool calling
+  - Multi-adapter: OpenAI, Anthropic, Gemini
+  - Multi-provider: DeepSeek, Qwen, ChatGPT
+  - Quản lý session, hash cache, tool calling
         │
         ▼
-  DeepSeek Chat API (chat.deepseek.com)
-  - Chat thật bằng tài khoản DeepSeek
+  Chat Web API (chat.deepseek.com / chat.qwen.ai / chatgpt.com)
+  - Chat thật bằng tài khoản người dùng
 ```
 
-Bạn chỉ cần tài khoản DeepSeek (email + password), server sẽ tự động login, giải Proof-of-Work, tạo session và dịch request/response qua lại giữa OpenAI API và DeepSeek Chat API.
+Bạn chỉ cần tài khoản trên nền tảng tương ứng (email + password hoặc token), server sẽ tự động login, tạo session và dịch request/response qua lại.
 
 ## Công nghệ
 
-| Thành phần      | Stack                                                 |
-| --------------- | ----------------------------------------------------- |
-| Backend         | Node.js, TypeScript, Express                          |
-| Database        | SQLite (better-sqlite3)                               |
-| Frontend        | React 19, Vite 6, Tailwind CSS v4, Radix UI, Recharts |
-| PoW             | Go WASM (nhanh) + JS fallback (chậm hơn)              |
-| Package manager | pnpm                                                  |
+| Thành phần      | Stack                                                    |
+| --------------- | -------------------------------------------------------- |
+| Backend         | Node.js, TypeScript, Express                             |
+| Database        | SQLite (better-sqlite3)                                  |
+| Frontend        | React 19, Vite 6, Tailwind CSS v4, Radix UI, Recharts    |
+| PoW (DeepSeek)  | Go WASM (nhanh) + JS fallback (chậm hơn)                 |
+| Monorepo        | pnpm workspace (`packages/backend` + `packages/web`)     |
 
 ## Cài đặt
 
-Yêu cầu: **Node.js >= 18**, **pnpm**
+Yêu cầu: **Node.js >= 22**, **pnpm >= 9**
 
 ```bash
 # Clone repository
@@ -44,7 +45,15 @@ cd llmweb2api
 pnpm install
 ```
 
-> `postinstall` sẽ build Go WASM cho Proof-of-Work. Nếu chưa cài Go, script sẽ báo warning và dùng JS fallback — chậm hơn nhưng vẫn dùng được.
+> `postinstall` sẽ build Go WASM cho Proof-of-Work (DeepSeek). Nếu chưa cài Go, script sẽ báo warning và dùng JS fallback — chậm hơn nhưng vẫn dùng được.
+
+## Docker
+
+```bash
+docker compose up -d
+```
+
+Server chạy tại `http://localhost:3567`.
 
 ## Cấu hình
 
@@ -61,7 +70,7 @@ cp .env.example .env
 | `DASHBOARD_PASSWORD` | `admin123`      | Mật khẩu đăng nhập dashboard |
 | `DB_PATH`            | `./data/app.db` | Đường dẫn file SQLite        |
 
-Tài khoản DeepSeek được quản lý qua Dashboard, không cần khai báo trong `.env`.
+Tài khoản được quản lý qua Dashboard, không cần khai báo trong `.env`.
 
 ## Chạy
 
@@ -83,17 +92,14 @@ pnpm start
 
 Server chạy tại `http://localhost:3000`, phục vụ cả API và giao diện dashboard từ một cổng duy nhất.
 
-### Chạy backend riêng
-
-```bash
-npx tsx src/index.ts
-```
-
 ## Thiết lập ban đầu
 
 1. **Đăng nhập dashboard**: Mở `http://localhost:3000`, đăng nhập bằng mật khẩu trong `DASHBOARD_PASSWORD`.
 
-2. **Thêm tài khoản DeepSeek**: Vào tab **Providers** → **Add Account** → Nhập email + password tài khoản DeepSeek.
+2. **Thêm tài khoản**: Vào tab **Providers** → **Add Account** → Chọn provider (`deepseek`, `qwen`, `chatgpt`) và nhập thông tin đăng nhập.
+   - DeepSeek: email + password
+   - Qwen: token (lấy từ tài khoản Qwen)
+   - ChatGPT: đang phát triển
 
 3. **Tạo API Key**: Vào tab **API Keys** → **Create New API Key**. Mặc định **Enable cache** được bật để tối ưu token usage.
 
@@ -150,32 +156,39 @@ npx tsx src/index.ts
 
 ## Tính năng chính
 
-- **Cache hội thoại**: Hash-based message tracking — chỉ gửi message mới lên DeepSeek, revert/edit được xử lý thông minh qua `edit_message`.
-- **Reasoning / Thinking**: Hỗ trợ deepseek-v4-pro với suy nghĩ (thinking).
+- **Multi-provider**: DeepSeek (web chat), Qwen (API token), ChatGPT (đang phát triển).
+- **Multi-adapter**: Tương thích OpenAI (`/v1`), Anthropic (`/v1/messages`), Gemini (`/v1beta/models/*:generateContent`).
+- **Hash-based cache**: Chỉ gửi message mới lên provider. Revert và edit được xử lý thông minh qua `parent_message_id`.
+- **Reasoning / Thinking**: Hỗ trợ DeepSeek và Qwen với suy nghĩ (thinking).
 - **Large prompt**: Prompt > 100KB được upload dưới dạng file đính kèm.
-- **Model mapping**: Map model name linh hoạt (ví dụ `gpt-4o` → `deepseek-v4-flash`).
-- **Multi-account**: Hỗ trợ nhiều tài khoản DeepSeek, tự chọn ngẫu nhiên tài khoản đang enabled.
+- **Model mapping**: Map model name linh hoạt (ví dụ `gpt-4o` → `deepseek-v4-flash`, `claude-sonnet-4-6` → `deepseek-v4-flash`).
+- **Multi-account**: Hỗ trợ nhiều tài khoản, tự chọn ngẫu nhiên tài khoản đang enabled.
 - **Analytics**: Dashboard với biểu đồ KPI, request volume, status code, latency, token usage.
-- **Tự động dọn dẹp**: Xóa log và conversation cũ theo cấu hình retention.
+- **Tự động dọn dẹp**: Xóa log và conversation cũ dựa trên `last_used` (chỉ xóa khi không dùng trong khoảng thời gian đã đặt).
 
 ## API Endpoints
 
 ### LLM
 
-| Endpoint                    | Định dạng |
-| --------------------------- | --------- |
-| `POST /v1/chat/completions` | OpenAI    |
-| `POST /v1/responses`        | OpenAI    |
+| Endpoint                              | Định dạng  |
+| ------------------------------------- | ---------- |
+| `POST /v1/chat/completions`           | OpenAI     |
+| `POST /v1/responses`                  | OpenAI     |
+| `POST /v1/messages`                   | Anthropic  |
+| `POST /v1beta/models/*:generateContent` | Gemini   |
+| `POST /v1beta/models/*:streamGenerateContent` | Gemini |
 
 ### Quản lý
 
-| Endpoint                 | Mô tả                      |
-| ------------------------ | -------------------------- |
-| `POST /api/auth/login`   | Đăng nhập dashboard        |
-| `GET/POST /api/accounts` | Quản lý tài khoản DeepSeek |
-| `GET/POST /api/api-keys` | Quản lý API key            |
-| `GET /api/logs`          | Xem log request            |
-| `GET/PUT /api/settings`  | Cấu hình hệ thống          |
+| Endpoint                   | Mô tả                         |
+| -------------------------- | ----------------------------- |
+| `POST /api/auth/login`     | Đăng nhập dashboard           |
+| `GET/POST /api/accounts`   | Quản lý tài khoản (provider)  |
+| `PUT/DELETE /api/accounts/:id` | Sửa / xóa tài khoản       |
+| `GET/POST /api/api-keys`   | Quản lý API key               |
+| `PUT/DELETE /api/api-keys/:id` | Sửa / xóa API key          |
+| `GET /api/logs`            | Xem log request               |
+| `GET/PUT /api/settings`    | Cấu hình hệ thống             |
 
 ### Khác
 
@@ -188,69 +201,90 @@ npx tsx src/index.ts
 ## Cấu trúc thư mục
 
 ```
-src/
-├── index.ts                     # Entry point
-├── app/
-│   ├── database.ts              # SQLite + migrations
-│   ├── server.ts                # Express setup
-│   ├── middleware/
-│   │   ├── auth.ts              # Bearer token auth
-│   │   ├── logger.ts            # Request logging
-│   │   └── rateLimit.ts         # Rate limiting
-│   ├── routes/
-│   │   ├── api.ts               # /v1/chat/completions
-│   │   ├── management.ts        # /api/accounts, /api/api-keys, ...
-│   │   ├── stats.ts             # /api/stats/*
-│   │   └── analytics.ts         # /api/analytics/*
-│   ├── models/
-│   │   ├── account.ts           # DeepSeek account CRUD
-│   │   ├── apiKey.ts            # API key CRUD
-│   │   ├── conversation.ts      # Hash cache persistence
-│   │   └── log.ts               # Request log persistence
-│   └── services/
-│       ├── analyticsService.ts  # Analytics queries
-│       ├── modelService.ts      # Model mapping
-│       ├── settingsService.ts   # Key-value settings
-│       └── statsService.ts      # Stats queries
-├── adapters/
-│   └── openai/                  # OpenAI <-> Internal format
-├── providers/
-│   ├── core/
-│   │   ├── manager.ts           # Session, cache, account orchestration
-│   │   ├── hash.ts              # Message hashing & hash cache
-│   │   ├── tool_parser.ts       # XML tool call parser
-│   │   ├── tool_prompt.ts       # Tool system prompt builder
-│   │   └── tool_sieve.ts        # Stream tool call extraction
-│   └── deepseek/
-│       ├── index.ts             # DeepSeekProvider
-│       ├── client.ts            # API client (login, session, PoW, completion)
-│       ├── models.ts            # Provider model definitions
-│       ├── types.ts             # API types & constants
-│       └── pow_native.ts        # WASM PoW initializer
-├── types/
-│   ├── adapter.ts
-│   ├── common.ts
-│   └── provider.ts
-└── tests/                       # Test files
-ui/
-├── index.html
-├── vite.config.ts
-└── src/
-    ├── App.tsx                  # App shell + routing
-    ├── main.tsx                 # Entry point
-    ├── pages/
-    │   ├── Login.tsx            # Dashboard login
-    │   ├── Providers.tsx        # Account management
-    │   ├── ApiKeys.tsx          # API key management
-    │   ├── Analysis.tsx         # Analytics dashboard
-    │   ├── Logs.tsx             # Request log viewer
-    │   └── Settings.tsx         # Settings + model maps
-    └── components/
-        ├── Layout.tsx           # App layout + sidebar
-        ├── AccountModal.tsx     # Add/edit account
-        ├── ApiKeyModal.tsx      # Add/edit API key
-        ├── charts/              # Recharts components
-        └── ui/                  # Radix UI wrappers
+packages/
+├── backend/
+│   ├── src/
+│   │   ├── index.ts                     # Entry point
+│   │   ├── app/
+│   │   │   ├── database.ts              # SQLite + migrations
+│   │   │   ├── server.ts                # Express setup
+│   │   │   ├── middleware/
+│   │   │   │   ├── auth.ts              # Bearer token / API key auth
+│   │   │   │   ├── logger.ts            # Request logging
+│   │   │   │   └── rateLimit.ts         # Rate limiting
+│   │   │   ├── routes/
+│   │   │   │   ├── api.ts               # /v1/chat/completions, /v1/messages, /v1beta/...
+│   │   │   │   ├── management.ts        # /api/accounts, /api/api-keys, ...
+│   │   │   │   ├── stats.ts             # /api/stats/*
+│   │   │   │   └── analytics.ts         # /api/analytics/*
+│   │   │   ├── models/
+│   │   │   │   ├── account.ts           # Provider account CRUD
+│   │   │   │   ├── apiKey.ts            # API key CRUD
+│   │   │   │   ├── conversation.ts      # Hash cache + last_used persistence
+│   │   │   │   └── log.ts               # Request log persistence
+│   │   │   └── services/
+│   │   │       ├── analyticsService.ts  # Analytics queries
+│   │   │       ├── modelService.ts      # Model mapping (OpenAI/Anthropic/Gemini)
+│   │   │       ├── providerService.ts   # Provider account lookup
+│   │   │       ├── settingsService.ts   # Key-value settings
+│   │   │       └── statsService.ts      # Stats queries
+│   │   ├── adapters/
+│   │   │   ├── openai/                  # OpenAI ↔ Internal format
+│   │   │   ├── anthropic/               # Anthropic ↔ Internal format
+│   │   │   └── gemini/                  # Gemini ↔ Internal format
+│   │   ├── providers/
+│   │   │   ├── core/
+│   │   │   │   ├── manager.ts           # Session, cache, account orchestration
+│   │   │   │   ├── hash.ts              # Message hashing & hash cache
+│   │   │   │   ├── tool_parser.ts       # XML tool call parser
+│   │   │   │   ├── tool_prompt.ts       # Tool system prompt builder
+│   │   │   │   └── tool_sieve.ts        # Stream tool call extraction
+│   │   │   ├── deepseek/
+│   │   │   │   ├── index.ts             # DeepSeekProvider
+│   │   │   │   ├── client.ts            # API client (login, session, PoW, completion)
+│   │   │   │   ├── models.ts            # Provider model definitions
+│   │   │   │   ├── types.ts             # API types & constants
+│   │   │   │   └── pow_native.ts        # WASM PoW initializer
+│   │   │   ├── qwen/
+│   │   │   │   ├── index.ts             # QwenProvider
+│   │   │   │   ├── client.ts            # API client (token auth, completion)
+│   │   │   │   ├── models.ts            # Provider model definitions
+│   │   │   │   ├── types.ts             # API types & constants
+│   │   │   │   └── transport.ts         # HTTP transport helpers
+│   │   │   └── chatgpt/
+│   │   │       └── index.ts             # ChatGPTProvider (WIP)
+│   │   ├── types/
+│   │   │   ├── adapter.ts
+│   │   │   ├── common.ts
+│   │   │   └── provider.ts
+│   │   └── tests/
+│   └── scripts/
+│       ├── build_pow_go.js              # Build Go WASM
+│       └── copy_pow_assets.js           # Copy WASM assets after build
+└── web/
+    ├── index.html
+    ├── vite.config.ts
+    └── src/
+        ├── App.tsx                       # App shell + routing
+        ├── main.tsx                      # Entry point
+        ├── api/client.ts                 # API client
+        ├── pages/
+        │   ├── Login.tsx                 # Dashboard login
+        │   ├── Providers.tsx             # Account management
+        │   ├── ApiKeys.tsx               # API key management
+        │   ├── Analysis.tsx              # Analytics dashboard
+        │   ├── Logs.tsx                  # Request log viewer
+        │   └── Settings.tsx              # Settings + model maps
+        ├── components/
+        │   ├── Layout.tsx                # App layout + sidebar
+        │   ├── Sidebar.tsx               # Navigation sidebar
+        │   ├── AccountModal.tsx          # Add/edit account wrapper
+        │   ├── AccountModalForm.tsx      # Add/edit account form
+        │   ├── ApiKeyModal.tsx           # Add/edit API key
+        │   ├── charts/                   # Recharts components
+        │   └── ui/                       # Radix UI wrappers
+        └── styles/
+            └── global.css                # Tailwind + custom styles
 ```
 
 ## License

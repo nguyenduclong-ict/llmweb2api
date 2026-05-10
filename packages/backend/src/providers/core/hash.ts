@@ -2,8 +2,8 @@ import crypto from 'crypto';
 import type { InternalMessage } from '../../types/common';
 
 export interface MessageHashEntry {
-  parent_message_id: number | null;
-  request_message_id: number;
+  parent_message_id: string | null;
+  request_message_id: string;
   image_summary?: string;
   image_count?: number;
 }
@@ -45,7 +45,7 @@ export function hashTools(tools: unknown[] | undefined): string | null {
 export function updateHashCacheParentId(
   hashCache: HashCacheMap,
   requestMessages: InternalMessage[],
-  lastResponseMessageId: number,
+  lastResponseMessageId: string,
 ): void {
   const tracked = filterTrackedMessages(requestMessages);
   for (const msg of tracked) {

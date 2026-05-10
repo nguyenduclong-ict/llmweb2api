@@ -1,5 +1,16 @@
-- hiện tại xoá conversation theo thời gian tạo, nghĩa là tính từ thời điểm tạo nếu vượt quá thời gian cho phép thì xoá
+# Đã implement: Xóa conversation dựa trên last_used
 
-vấn đề: nếu người dùng dùng liên tục conversation đó thì nó vẫn bị xoá, gây mất cache không mon muốn.
+> **Trạng thái: ĐÃ HOÀN THÀNH**
 
-Giải pháp: thêm column last_used vào, logic xoá sẽ check theo file này, điều này đảm bảo conversation chỉ bị xoá khi không dùng sau khoảng thời gian đã đặt. mỗi khi có request vào conversation này thì update last_used
+## Tóm tắt giải pháp
+
+- ~~Trước đây: xóa conversation theo `created_at`, nếu người dùng dùng liên tục conversation đó thì nó vẫn bị xóa, gây mất cache không mong muốn.~~
+- **Hiện tại**: Đã thêm column `last_used` (migration version 6).
+  - `last_used` được cập nhật mỗi khi có request vào conversation (trong `saveConversation` và `saveHashCache`).
+  - Logic dọn dẹp (`deleteOldConversations`) query dựa trên `last_used < datetime('now', '-maxAgeHours hours')`.
+  - Conversation chỉ bị xóa khi **không được dùng** trong khoảng thời gian retention đã đặt.
+
+## Code location
+
+- `packages/backend/src/app/models/conversation.ts:131-135` — cleanup query
+- `packages/backend/src/app/database.ts:254-259` — migration add `last_used`

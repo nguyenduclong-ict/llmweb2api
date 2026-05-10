@@ -11,7 +11,7 @@ export interface ConversationRecord {
   output_tokens: number;
   tools_hash: string | null;
   last_used: string;
-  last_message_id: number | null;
+  last_message_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -67,7 +67,7 @@ export function saveHashCache(
   providerName: string,
   hashCache: HashCacheMap,
   toolsHash: string | null,
-  lastMessageId: number | null,
+  lastMessageId: string | null,
   inputTokens?: number,
   outputTokens?: number,
 ): void {
@@ -116,7 +116,7 @@ export function loadToolsHash(conversationId: string): string | null {
   return row.tools_hash || null;
 }
 
-export function loadLastMessageId(conversationId: string): number | null {
+export function loadLastMessageId(conversationId: string): string | null {
   const row = getByConversationId(conversationId);
   if (!row) return null;
   return row.last_message_id ?? null;

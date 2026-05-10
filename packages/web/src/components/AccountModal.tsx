@@ -29,11 +29,7 @@ export function AccountModal({ open, onOpenChange, editingAccount, onSave }: Acc
               {editingAccount ? 'Update account details below.' : 'Fill in the account information.'}
             </DialogDescription>
           </DialogHeader>
-          <AccountModalForm
-            editingAccount={editingAccount}
-            onSave={onSave}
-            onCancel={() => onOpenChange(false)}
-          />
+          <AccountModalForm editingAccount={editingAccount} onSave={onSave} onCancel={() => onOpenChange(false)} />
         </div>
       </DialogContent>
     </Dialog>
