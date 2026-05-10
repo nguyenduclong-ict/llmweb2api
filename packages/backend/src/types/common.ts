@@ -52,6 +52,7 @@ export interface InternalMessage {
 export interface InternalRequest {
   model: string;
   providerModel?: string;
+  providerName: string;
   messages: InternalMessage[];
   stream: boolean;
   maxTokens?: number;

@@ -119,7 +119,7 @@ apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Re
 
       try {
         const { stream, accountId, conversationId } = await processChatStream(
-          'deepseek',
+          internalReq.providerName,
           internalReq,
           useCache,
           controller.signal,
@@ -156,7 +156,7 @@ apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Re
       return;
     }
 
-    const { response, accountId } = await processChat('deepseek', internalReq, useCache);
+    const { response, accountId } = await processChat(internalReq.providerName, internalReq, useCache);
 
     (req as any).accountId = accountId;
     res.json(openaiAdapter.formatResponse(response));
@@ -189,7 +189,7 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
 
       try {
         const { stream, accountId, conversationId } = await processChatStream(
-          'deepseek',
+          internalReq.providerName,
           internalReq,
           useCache,
           controller.signal,
@@ -260,7 +260,7 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
       return;
     }
 
-    const { response, accountId } = await processChat('deepseek', internalReq, useCache);
+    const { response, accountId } = await processChat(internalReq.providerName, internalReq, useCache);
 
     (req as any).accountId = accountId;
     res.json(openaiResponsesAdapter.formatResponse(response));
@@ -293,7 +293,7 @@ apiRoutes.post('/v1/messages', apiPipeline, async (req: Request, res: Response) 
 
       try {
         const { stream, accountId, conversationId } = await processChatStream(
-          'deepseek',
+          internalReq.providerName,
           internalReq,
           useCache,
           controller.signal,
@@ -333,7 +333,7 @@ apiRoutes.post('/v1/messages', apiPipeline, async (req: Request, res: Response) 
       return;
     }
 
-    const { response, accountId } = await processChat('deepseek', internalReq, useCache);
+    const { response, accountId } = await processChat(internalReq.providerName, internalReq, useCache);
 
     (req as any).accountId = accountId;
     res.json(anthropicAdapter.formatResponse(response));
@@ -364,7 +364,7 @@ apiRoutes.post('/v1/models/:modelModel', apiPipeline, async (req: Request, res: 
 
       try {
         const { stream, accountId, conversationId } = await processChatStream(
-          'deepseek',
+          internalReq.providerName,
           internalReq,
           useCache,
           controller.signal,
@@ -394,7 +394,7 @@ apiRoutes.post('/v1/models/:modelModel', apiPipeline, async (req: Request, res: 
       return;
     }
 
-    const { response, accountId } = await processChat('deepseek', internalReq, useCache);
+    const { response, accountId } = await processChat(internalReq.providerName, internalReq, useCache);
 
     (req as any).accountId = accountId;
     res.json(geminiAdapter.formatResponse(response));

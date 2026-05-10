@@ -84,7 +84,16 @@ export function saveHashCache(
   } else {
     prepareAndRun(
       "INSERT INTO conversations (conversation_id, account_id, provider, messages, input_tokens, output_tokens, tools_hash, last_message_id, last_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))",
-      [conversationId, accountId, providerName, json, inputTokens ?? 0, outputTokens ?? 0, toolsHash ?? '', lastMessageId],
+      [
+        conversationId,
+        accountId,
+        providerName,
+        json,
+        inputTokens ?? 0,
+        outputTokens ?? 0,
+        toolsHash ?? '',
+        lastMessageId,
+      ],
     );
   }
 }

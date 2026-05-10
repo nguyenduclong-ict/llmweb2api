@@ -571,7 +571,7 @@ console.log('\n========== ToolSieve: unknown [#l2a:role] blocks ==========');
 // Test 27: Unknown block without closing → emitted as-is on flush
 {
   const sieve = new ToolSieve();
-  const events = sieve.processChunk('[#l2a:question]\nunclosed content');
+  sieve.processChunk('[#l2a:question]\nunclosed content');
   const flushed = sieve.flush();
   const flushedText = flushed
     .filter((e) => e.type === 'content')

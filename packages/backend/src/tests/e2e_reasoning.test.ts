@@ -13,7 +13,7 @@ interface StreamChunk {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-async function post(url: string, body: unknown, stream = false): Promise<Response> {
+async function post(url: string, body: unknown, _stream = false): Promise<Response> {
   const res = await fetch(url, {
     method: 'POST',
     headers: {

@@ -21,20 +21,14 @@ statsRoutes.get('/stats', (req: Request, res: Response) => {
 // GET /api/stats/request-volume - Request volume theo thoi gian
 statsRoutes.get('/stats/request-volume', (req: Request, res: Response) => {
   const { startDate, endDate, granularity } = req.query;
-  const g =
-    granularity === 'day' || granularity === 'week' || granularity === 'month'
-      ? granularity
-      : 'hour';
+  const g = granularity === 'day' || granularity === 'week' || granularity === 'month' ? granularity : 'hour';
   res.json(getRequestVolume(startDate as string, endDate as string, g));
 });
 
 // GET /api/stats/request-status-timeline - Requests & Errors theo thoi gian
 statsRoutes.get('/stats/request-status-timeline', (req: Request, res: Response) => {
   const { startDate, endDate, granularity } = req.query;
-  const g =
-    granularity === 'day' || granularity === 'week' || granularity === 'month'
-      ? granularity
-      : 'hour';
+  const g = granularity === 'day' || granularity === 'week' || granularity === 'month' ? granularity : 'hour';
   res.json(getRequestStatusTimeline(startDate as string, endDate as string, g));
 });
 
@@ -59,10 +53,7 @@ statsRoutes.get('/stats/by-model', (req: Request, res: Response) => {
 // GET /api/stats/daily-tokens - Token usage theo granularity
 statsRoutes.get('/stats/daily-tokens', (req: Request, res: Response) => {
   const { startDate, endDate, granularity } = req.query;
-  const g =
-    granularity === 'hour' || granularity === 'week' || granularity === 'month'
-      ? granularity
-      : 'day';
+  const g = granularity === 'hour' || granularity === 'week' || granularity === 'month' ? granularity : 'day';
   res.json(getDailyTokenStats(startDate as string, endDate as string, g));
 });
 

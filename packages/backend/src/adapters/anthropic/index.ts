@@ -68,6 +68,7 @@ export const anthropicAdapter: Adapter = {
     return {
       model: resolved.responseModel,
       providerModel: resolved.providerModel,
+      providerName: resolved.providerName,
       messages,
       stream: body.stream ?? false,
       maxTokens: body.max_tokens,

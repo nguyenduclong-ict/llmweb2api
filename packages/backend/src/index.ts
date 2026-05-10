@@ -5,6 +5,7 @@ import { initDatabase } from './app/database';
 import { createServer } from './app/server';
 import { registerProvider } from './providers/core/manager';
 import { deepseekProvider } from './providers/deepseek';
+import { qwenProvider } from './providers/qwen';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -15,6 +16,9 @@ async function main(): Promise<void> {
 
   registerProvider(deepseekProvider);
   console.log('[PROVIDER] Registered: deepseek');
+
+  registerProvider(qwenProvider);
+  console.log('[PROVIDER] Registered: qwen');
 
   const app = createServer();
 

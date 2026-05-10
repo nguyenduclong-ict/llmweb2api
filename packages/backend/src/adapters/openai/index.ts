@@ -266,6 +266,7 @@ export const openaiAdapter: Adapter = {
     return {
       model: resolved.responseModel,
       providerModel: resolved.providerModel,
+      providerName: resolved.providerName,
       messages,
       stream: body.stream ?? false,
       maxTokens: body.max_tokens ?? body.max_completion_tokens,
@@ -426,6 +427,7 @@ export const openaiResponsesAdapter: Adapter & {
     return {
       model: resolved.responseModel,
       providerModel: resolved.providerModel,
+      providerName: resolved.providerName,
       messages,
       stream: body.stream ?? false,
       maxTokens: body.max_output_tokens ?? body.max_tokens,

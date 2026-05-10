@@ -5,16 +5,6 @@ import { getBlockContent } from '../providers/core/tool_prompt';
 let passed = 0;
 let failed = 0;
 
-function assert(condition: boolean, msg: string) {
-  if (condition) {
-    passed++;
-    console.log(`  PASS: ${msg}`);
-  } else {
-    failed++;
-    console.error(`  FAIL: ${msg}`);
-  }
-}
-
 function assertEq<T>(actual: T, expected: T, msg: string) {
   if (JSON.stringify(actual) === JSON.stringify(expected)) {
     passed++;

@@ -67,7 +67,7 @@ export function getRequestVolume(
     timeExpr = "strftime('%Y-%m-%d %H:00', created_at)";
     timeSlice = -5;
   } else if (granularity === 'day') {
-    timeExpr = "date(created_at)";
+    timeExpr = 'date(created_at)';
     timeSlice = 0;
   } else if (granularity === 'week') {
     timeExpr = "strftime('%Y-W%W', created_at)";
@@ -134,7 +134,7 @@ export function getRequestStatusTimeline(
     timeExpr = "strftime('%Y-%m-%d %H:00', created_at)";
     timeSlice = -5;
   } else if (granularity === 'day') {
-    timeExpr = "date(created_at)";
+    timeExpr = 'date(created_at)';
     timeSlice = 0;
   } else if (granularity === 'week') {
     timeExpr = "strftime('%Y-W%W', created_at)";
@@ -168,12 +168,6 @@ export interface StatusCodeItem {
   count: number;
   color: string;
 }
-
-const STATUS_COLORS: Record<string, string> = {
-  '2xx': '#22c55e',
-  '4xx': '#f59e0b',
-  '5xx': '#ef4444',
-};
 
 export function getStatusCodeDistribution(
   startDate?: string,
@@ -375,7 +369,7 @@ export function getDailyTokenStats(
   if (granularity === 'hour') {
     timeExpr = "strftime('%Y-%m-%d %H:00', created_at)";
   } else if (granularity === 'day') {
-    timeExpr = "date(created_at)";
+    timeExpr = 'date(created_at)';
   } else if (granularity === 'week') {
     timeExpr = "strftime('%Y-W%W', created_at)";
   } else {
@@ -458,8 +452,7 @@ export function getKpiStats(startDate?: string, endDate?: string): KPIResponse {
 
   const currentErrorRate =
     currentStats.requests > 0 ? Math.round((currentStats.errors / currentStats.requests) * 1000) / 10 : 0;
-  const prevErrorRate =
-    prevStats.requests > 0 ? Math.round((prevStats.errors / prevStats.requests) * 1000) / 10 : 0;
+  const prevErrorRate = prevStats.requests > 0 ? Math.round((prevStats.errors / prevStats.requests) * 1000) / 10 : 0;
 
   return {
     totalRequests: currentStats.requests,
@@ -474,7 +467,7 @@ export function getKpiStats(startDate?: string, endDate?: string): KPIResponse {
 }
 
 // ---- Increment stats (giữ nguyên) ----
-export function incrementStats(params: {
+export function incrementStats(_params: {
   model: string;
   change: { tokens: number; ttfb: number; streaming: boolean };
 }): void {

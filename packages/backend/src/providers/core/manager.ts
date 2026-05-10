@@ -2,7 +2,6 @@ import type { Provider, SessionContext } from '../../types/provider';
 import type { InternalRequest, InternalResponse, InternalStreamChunk, InternalMessage } from '../../types/common';
 import * as accountModel from '../../app/models/account';
 import * as conversationModel from '../../app/models/conversation';
-import { deleteSession as deleteDeepSeekSession } from '../deepseek/client';
 import { hashMessage, filterTrackedMessages, hashTools, updateHashCacheParentId, type HashCacheMap } from './hash';
 
 const providerRegistry = new Map<string, Provider>();
@@ -18,7 +17,8 @@ export function getProvider(name: string): Provider | undefined {
 // --- Session Reuse (shared by cache & non-cache flows) ---
 
 interface SessionEntry {
-  deepseekSessionId: string;
+  providerSessionId: string;
+  providerName: string;
   accountId: number;
   parentMessageId?: string;
   lastRequestMessageId?: string;
@@ -32,11 +32,12 @@ function getSession(conversationId: string): SessionEntry | undefined {
 
 function saveSession(
   conversationId: string,
-  deepseekSessionId: string,
+  providerSessionId: string,
+  providerName: string,
   accountId: number,
   parentMessageId?: string,
 ): void {
-  sessionStore.set(conversationId, { deepseekSessionId, accountId, parentMessageId });
+  sessionStore.set(conversationId, { providerSessionId, providerName, accountId, parentMessageId });
 }
 
 function updateSessionParent(conversationId: string, parentMessageId: string): void {
@@ -81,7 +82,7 @@ export async function processChat(
 
   if (isNew) {
     ctx.metadata.conversationId = ctx.sessionId;
-    saveSession(ctx.sessionId, ctx.sessionId, ctx.accountId);
+    saveSession(ctx.sessionId, ctx.sessionId, providerName, ctx.accountId);
   }
 
   const response = await provider.chat(ctx, request);
@@ -118,7 +119,7 @@ export async function processChatStream(
 
   if (isNew) {
     ctx.metadata.conversationId = ctx.sessionId;
-    saveSession(ctx.sessionId, ctx.sessionId, ctx.accountId);
+    saveSession(ctx.sessionId, ctx.sessionId, providerName, ctx.accountId);
   }
 
   const innerStream = provider.chatStream(ctx, request, signal);
@@ -145,8 +146,8 @@ export async function processChatStream(
 async function reuseSession(providerName: string, conversationId: string): Promise<SessionContext> {
   const entry = getSession(conversationId);
   if (entry) {
-    console.log(`[CONV] Reusing session: ${entry.deepseekSessionId}`);
-    return buildSessionContext(entry.accountId, entry.deepseekSessionId);
+    console.log(`[CONV] Reusing session: ${entry.providerSessionId}`);
+    return buildSessionContext(entry.providerName, entry.accountId, entry.providerSessionId, conversationId);
   }
 
   // Session not in memory — rebuild from DB or start fresh
@@ -162,10 +163,10 @@ async function reuseSession(providerName: string, conversationId: string): Promi
   // No DB entry — start fresh but preserve original conversationId as key
   const provider = ensureProvider(providerName);
   const account = await selectAccount(providerName);
-  console.log(`[CONV] ${conversationId} not in DB, creating new DeepSeek session`);
+  console.log(`[CONV] ${conversationId} not in DB, creating new ${providerName} session`);
   const ctx = await createSession(provider, account);
   ctx.metadata.conversationId = conversationId;
-  saveSession(conversationId, ctx.sessionId, account.itemId);
+  saveSession(conversationId, ctx.sessionId, providerName, account.itemId);
   return ctx;
 }
 
@@ -220,23 +221,28 @@ export async function dumpConversation(conversationId: string): Promise<void> {
   if (entry) {
     sessionStore.delete(conversationId);
     try {
-      const items = accountModel.getByProvider('deepseek');
+      const items = accountModel.getByProvider(entry.providerName);
       const item = items.find((i) => i.id === entry.accountId);
       if (item) {
         let session: Record<string, unknown>;
+        let settings: Record<string, unknown>;
         try {
           session = JSON.parse(item.session || '{}');
         } catch {
           session = {};
         }
-        const token = (session.token as string) || '';
-        if (token) {
-          await deleteDeepSeekSession(token, entry.deepseekSessionId);
-          console.log(`[CONV] Deleted DeepSeek session ${entry.deepseekSessionId} for ${conversationId}`);
+        try {
+          settings = JSON.parse(item.settings || '{}');
+        } catch {
+          settings = {};
         }
+        const token = await ensureToken(entry.providerName, { itemId: item.id, settings, session });
+        const provider = ensureProvider(entry.providerName);
+        await provider.dispose({ accountId: item.id, token, sessionId: entry.providerSessionId, metadata: {} });
+        console.log(`[CONV] Deleted ${entry.providerName} session ${entry.providerSessionId} for ${conversationId}`);
       }
     } catch (err) {
-      console.error(`[CONV] Failed to delete DeepSeek session for ${conversationId}:`, err);
+      console.error(`[CONV] Failed to delete provider session for ${conversationId}:`, err);
     }
   }
 }
@@ -279,7 +285,7 @@ async function selectAccount(providerName: string): Promise<AccountSelection> {
   return { itemId: item.id, settings, session };
 }
 
-async function ensureToken(account: AccountSelection): Promise<string> {
+async function ensureToken(providerName: string, account: AccountSelection): Promise<string> {
   const cached = tokenCache.get(account.itemId);
   if (cached) {
     console.log(`[AUTH] Using cached token for account ${account.itemId}`);
@@ -304,7 +310,7 @@ async function ensureToken(account: AccountSelection): Promise<string> {
     console.log(`[AUTH] No token for account ${account.itemId}, logging in...`);
   }
 
-  const provider = ensureProvider('deepseek');
+  const provider = ensureProvider(providerName);
   const ctx = await provider.login(account.settings);
   token = ctx.token;
   const expiresAt = now + 24 * 60 * 60 * 1000;
@@ -317,14 +323,19 @@ async function ensureToken(account: AccountSelection): Promise<string> {
 }
 
 async function createSession(provider: Provider, account: AccountSelection): Promise<SessionContext> {
-  const token = await ensureToken(account);
+  const token = await ensureToken(provider.name, account);
   const ctx = await provider.createSession({ accountId: account.itemId, token, sessionId: '', metadata: {} });
   console.log(`[CONV] New conversation created: ${ctx.sessionId}`);
   return ctx;
 }
 
-async function buildSessionContext(accountId: number, conversationId: string): Promise<SessionContext> {
-  const items = accountModel.getByProvider('deepseek');
+async function buildSessionContext(
+  providerName: string,
+  accountId: number,
+  providerSessionId: string,
+  conversationKey = providerSessionId,
+): Promise<SessionContext> {
+  const items = accountModel.getByProvider(providerName);
   const item = items.find((i) => i.id === accountId);
   if (!item) throw new Error(`Account ${accountId} not found`);
 
@@ -341,12 +352,12 @@ async function buildSessionContext(accountId: number, conversationId: string): P
     session = {};
   }
 
-  const token = await ensureToken({ itemId: item.id, settings, session });
-  const entry = getSession(conversationId);
+  const token = await ensureToken(providerName, { itemId: item.id, settings, session });
+  const entry = getSession(conversationKey);
   return {
     accountId,
     token,
-    sessionId: entry?.deepseekSessionId || conversationId,
+    sessionId: entry?.providerSessionId || providerSessionId,
     metadata: { parentMessageId: entry?.parentMessageId },
   };
 }
@@ -361,7 +372,7 @@ async function processFirstCachedChat(
   const account = await selectAccount(providerName);
   const ctx = await createSession(provider, account);
   ctx.metadata.conversationId = ctx.sessionId;
-  saveSession(ctx.sessionId, ctx.sessionId, account.itemId);
+  saveSession(ctx.sessionId, ctx.sessionId, providerName, account.itemId);
 
   const response = await provider.chat(ctx, request);
 
@@ -413,7 +424,7 @@ async function processFirstCachedChatStream(
   }
   const ctx = await createSession(provider, account);
   ctx.metadata.conversationId = ctx.sessionId;
-  saveSession(ctx.sessionId, ctx.sessionId, account.itemId);
+  saveSession(ctx.sessionId, ctx.sessionId, providerName, account.itemId);
 
   const innerStream = provider.chatStream(ctx, request, signal);
   const toolsHash = hashTools(request.tools as unknown[] | undefined);
@@ -529,7 +540,7 @@ async function processCachedChat(
   // All messages match → regenerate
   if (diff.isFullMatch) {
     console.log(`[CONV] Full hash match for ${conversationId}, regenerating`);
-    const ctx = await buildSessionContext(cached.accountId, conversationId);
+    const ctx = await buildSessionContext(providerName, cached.accountId, conversationId);
     ctx.metadata.parentMessageId = undefined;
     ctx.metadata.conversationId = conversationId;
     attachCachedImageSummaries(ctx, cached.hashCache, request.messages);
@@ -558,7 +569,7 @@ async function processCachedChat(
   if (isRevert) {
     pruneHashCache(cached.hashCache, diff.lastMatchedHash);
 
-    const ctx = await buildSessionContext(cached.accountId, conversationId);
+    const ctx = await buildSessionContext(providerName, cached.accountId, conversationId);
     ctx.metadata.parentMessageId = diff.parentMessageId;
     ctx.metadata.conversationId = conversationId;
     attachCachedImageSummaries(ctx, cached.hashCache, request.messages);
@@ -589,7 +600,7 @@ async function processCachedChat(
   }
 
   // Normal append: send only new messages
-  const ctx = await buildSessionContext(cached.accountId, conversationId);
+  const ctx = await buildSessionContext(providerName, cached.accountId, conversationId);
   ctx.metadata.parentMessageId = diff.parentMessageId;
   ctx.metadata.conversationId = conversationId;
   attachCachedImageSummaries(ctx, cached.hashCache, request.messages);
@@ -682,7 +693,7 @@ async function processCachedChatStream(
     } else {
       console.log(`[CONV] Full hash match for ${conversationId}, regenerating (no edit id, full regenerate)`);
     }
-    const ctx = await buildSessionContext(conv.accountId, conversationId);
+    const ctx = await buildSessionContext(providerName, conv.accountId, conversationId);
     ctx.metadata.editMessageId = lastReqId ? Number(lastReqId) : undefined;
     ctx.metadata.conversationId = conversationId;
     attachCachedImageSummaries(ctx, conv.hashCache, request.messages);
@@ -776,7 +787,7 @@ async function processCachedChatStream(
     const editMsgId = diff.matchedCount > 0 ? diff.parentMessageId : undefined;
     const useEditId = lastReqId ? Number(lastReqId) : (editMsgId ?? undefined);
 
-    const ctx = await buildSessionContext(conv.accountId, conversationId);
+    const ctx = await buildSessionContext(providerName, conv.accountId, conversationId);
     ctx.metadata.editMessageId = useEditId;
     ctx.metadata.parentMessageId = diff.parentMessageId;
     ctx.metadata.conversationId = conversationId;
@@ -872,7 +883,7 @@ async function processCachedChatStream(
     `[CONV] NORMAL_APPEND convId=${conversationId} parentMsgId=${diff.parentMessageId} ` +
       `msgsToSend=${diff.messagesToSend.length} roles=[${diff.messagesToSend.map((m) => m.role).join(',')}]`,
   );
-  const ctx = await buildSessionContext(conv.accountId, conversationId);
+  const ctx = await buildSessionContext(providerName, conv.accountId, conversationId);
   ctx.metadata.parentMessageId = diff.parentMessageId;
   ctx.metadata.conversationId = conversationId;
   attachCachedImageSummaries(ctx, conv.hashCache, request.messages);
@@ -972,8 +983,9 @@ async function restoreSessionContext(
 ): Promise<{ ctx: SessionContext; account: AccountSelection }> {
   ensureProvider(providerName);
   const account = await selectAccount(providerName);
-  const token = await ensureToken(account);
+  const token = await ensureToken(providerName, account);
   const lastMessageId = parentMessageIdOverride ?? conversationModel.loadLastMessageId(conversationId);
+  const tokenStats = conversationModel.loadTokenStats(conversationId);
   const ctx: SessionContext = {
     accountId: account.itemId,
     token,
@@ -982,9 +994,12 @@ async function restoreSessionContext(
       parentMessageId: lastMessageId ?? undefined,
       conversationId,
       isRestoredSession: true,
+      ...(tokenStats
+        ? { cumulativeInputTokens: tokenStats.inputTokens, cumulativeOutputTokens: tokenStats.outputTokens }
+        : {}),
     },
   };
-  saveSession(conversationId, conversationId, account.itemId, String(lastMessageId || ''));
+  saveSession(conversationId, conversationId, providerName, account.itemId, String(lastMessageId || ''));
   console.log(`[CONV] Restored existing session: ${conversationId} parentMsgId=${lastMessageId || '<none>'}`);
   return { ctx, account };
 }

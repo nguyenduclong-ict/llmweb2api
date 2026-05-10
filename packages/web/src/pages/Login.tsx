@@ -3,7 +3,7 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Zap, Loader2 } from 'lucide-react';
+import { Zap } from 'lucide-react';
 
 interface LoginProps {
   onLogin: (password: string) => void;
@@ -12,7 +12,7 @@ interface LoginProps {
 export default function Login({ onLogin }: LoginProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

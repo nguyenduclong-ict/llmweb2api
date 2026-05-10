@@ -34,7 +34,9 @@ export function loggerMiddleware(req: Request, res: Response, next: NextFunction
               streamInputTokens = json.usage.prompt_tokens ?? json.usage.input_tokens ?? 0;
               streamOutputTokens = json.usage.completion_tokens ?? json.usage.output_tokens ?? 0;
             }
-          } catch { /* skip malformed */ }
+          } catch {
+            /* skip malformed */
+          }
         }
       }
     }

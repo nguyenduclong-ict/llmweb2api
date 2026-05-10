@@ -80,6 +80,7 @@ export const geminiAdapter: Adapter = {
     return {
       model: resolved.responseModel,
       providerModel: resolved.providerModel,
+      providerName: resolved.providerName,
       messages,
       stream: false,
       maxTokens: genConfig.maxOutputTokens,

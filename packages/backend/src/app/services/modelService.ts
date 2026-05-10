@@ -1,5 +1,12 @@
 import { getSetting } from './settingsService';
-import { getProviderModelMeta, getAllProviderModels } from '../../providers/deepseek/models';
+import {
+  getProviderModelMeta as getDeepSeekModelMeta,
+  getAllProviderModels as getAllDeepSeekModels,
+} from '../../providers/deepseek/models';
+import {
+  getProviderModelMeta as getQwenModelMeta,
+  getAllProviderModels as getAllQwenModels,
+} from '../../providers/qwen/models';
 import type { ProviderModelMeta } from '../../providers/deepseek/models';
 import type { ResolvedModel } from '../../types/common';
 
@@ -70,19 +77,20 @@ export function resolveModel(
     const matchKey = Object.keys(map).find((k) => k.toLowerCase() === lowerModel);
     if (matchKey) {
       providerModel = map[matchKey];
-    } else if (getProviderModelMeta(vendorModel)) {
-      // vendorModel is already a valid provider model (e.g. "deepseek-v4-pro")
+    } else if (getDeepSeekModelMeta(vendorModel) || getQwenModelMeta(vendorModel)) {
+      // vendorModel is already a valid provider model
       providerModel = vendorModel;
     } else {
       providerModel = 'deepseek-v4-flash';
     }
   }
 
-  const meta: ProviderModelMeta = getProviderModelMeta(providerModel) ?? {
-    thinking: 'off',
-    search: false,
-    modelType: 'default',
-  };
+  const meta: ProviderModelMeta = getDeepSeekModelMeta(providerModel) ??
+    getQwenModelMeta(providerModel) ?? {
+      thinking: 'off',
+      search: false,
+      modelType: 'default',
+    };
 
   let thinking = meta.thinking === 'on' || meta.thinking === 'toggleable';
   if (meta.thinking === 'toggleable' && options?.thinking === false) {
@@ -101,12 +109,13 @@ export function resolveModel(
 
 function resolveProviderName(providerModel: string): string {
   if (providerModel.startsWith('deepseek-')) return 'deepseek';
-  if (providerModel.startsWith('chatgpt-')) return 'chatgpt';
+  if (providerModel.startsWith('gpt-')) return 'chatgpt';
+  if (providerModel.startsWith('qwen')) return 'qwen';
   return 'deepseek';
 }
 
 export function getAvailableProviderModels(): string[] {
-  return getAllProviderModels();
+  return [...getAllDeepSeekModels(), ...getAllQwenModels()];
 }
 
 export function getDefaultMaps(): Record<AdapterName, ModelMap> {
