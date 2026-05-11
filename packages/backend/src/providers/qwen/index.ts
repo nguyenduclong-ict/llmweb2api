@@ -124,7 +124,7 @@ class QwenProvider implements Provider {
     const cumulative = this.accumulateTokens(ctx.sessionId, inputTokens, outputTokens);
 
     if (ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-      reasoning = (reasoning || '') + `\n#conversation_id=${ctx.metadata.conversationId}`;
+      reasoning = `#conversation_id=${ctx.metadata.conversationId} ` + (reasoning || '');
       this.sentConversationId.add(ctx.sessionId);
       console.log(`[QWEN] non-stream: injected #conversation_id=${ctx.metadata.conversationId} into reasoning`);
     }
@@ -174,12 +174,14 @@ class QwenProvider implements Provider {
       const shouldSendConvId = !!(ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId));
 
       if (shouldSendConvId) {
-        console.log(`[QWEN] edit-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`);
+        console.log(
+          `[QWEN] edit-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`,
+        );
         yield {
           id: streamId,
           model: request.model,
           content: '',
-          reasoningContent: `#conversation_id=${ctx.metadata.conversationId}`,
+          reasoningContent: `#conversation_id=${ctx.metadata.conversationId} `,
           finishReason: null,
         };
         this.sentConversationId.add(ctx.sessionId);
@@ -344,12 +346,14 @@ class QwenProvider implements Provider {
     const shouldSendConvId = !!(ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId));
 
     if (shouldSendConvId) {
-      console.log(`[QWEN] regular-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`);
+      console.log(
+        `[QWEN] regular-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`,
+      );
       yield {
         id: streamId,
         model: request.model,
         content: '',
-        reasoningContent: `#conversation_id=${ctx.metadata.conversationId}`,
+        reasoningContent: `#conversation_id=${ctx.metadata.conversationId} `,
         finishReason: null,
       };
       this.sentConversationId.add(ctx.sessionId);

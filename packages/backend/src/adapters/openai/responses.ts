@@ -136,9 +136,10 @@ function formatResponsesUsage(internal: InternalResponse | InternalStreamChunk):
     total_tokens: inTok + outTok,
   };
   usage.output_tokens_details = {
-    reasoning_tokens: ('reasoningTokens' in internal.usage && internal.usage.reasoningTokens !== undefined)
-      ? internal.usage.reasoningTokens
-      : 0,
+    reasoning_tokens:
+      'reasoningTokens' in internal.usage && internal.usage.reasoningTokens !== undefined
+        ? internal.usage.reasoningTokens
+        : 0,
   };
 
   return usage;
@@ -157,7 +158,7 @@ function formatResponsesOutput(internal: InternalResponse): unknown[] {
   }
 
   const cleanReasoning = internal.reasoningContent
-    ? internal.reasoningContent.replace(/\n?#conversation_id=[a-zA-Z0-9-_]+/, '').trim()
+    ? internal.reasoningContent.replace(/#conversation_id=[a-fA-F0-9-]{36}\s?/, '').trim()
     : '';
 
   const output: Record<string, unknown>[] = [];
@@ -343,7 +344,7 @@ export const openaiResponsesAdapter: Adapter & {
     outputIndexBase = 1,
   ): string {
     const cleanReasoning = reasoningText
-      ? reasoningText.replace(/\n?#conversation_id=[a-zA-Z0-9-_]+/, '').trim()
+      ? reasoningText.replace(/#conversation_id=[a-fA-F0-9-]{36}\s?/, '').trim()
       : '';
 
     if (toolCalls && toolCalls.length > 0) {

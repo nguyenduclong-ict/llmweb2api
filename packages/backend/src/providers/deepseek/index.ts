@@ -23,15 +23,15 @@ interface ImageSummary {
   imageCount: number;
 }
 
-const VISION_SYSTEM_PROMPT = `Bạn là model vision phụ trợ. Hãy phân tích các ảnh được đính kèm để hỗ trợ model chính không có vision.
+const VISION_SYSTEM_PROMPT = `BÃ¡ÂºÂ¡n lÃƒÂ  model vision phÃ¡Â»Â¥ trÃ¡Â»Â£. HÃƒÂ£y phÃƒÂ¢n tÃƒÂ­ch cÃƒÂ¡c Ã¡ÂºÂ£nh Ã„â€˜Ã†Â°Ã¡Â»Â£c Ã„â€˜ÃƒÂ­nh kÃƒÂ¨m Ã„â€˜Ã¡Â»Æ’ hÃ¡Â»â€” trÃ¡Â»Â£ model chÃƒÂ­nh khÃƒÂ´ng cÃƒÂ³ vision.
 
-Yêu cầu:
-- Trả lời bằng tiếng Việt nếu người dùng dùng tiếng Việt.
-- Mô tả các chi tiết quan trọng trong ảnh.
-- OCR mọi chữ nhìn thấy được nếu có.
-- Trả lời trực tiếp yêu cầu cuối của người dùng dựa trên ảnh.
-- Không gọi công cụ.
-- Không nói rằng bạn không thấy ảnh nếu ảnh đã được đính kèm.`;
+YÃƒÂªu cÃ¡ÂºÂ§u:
+- TrÃ¡ÂºÂ£ lÃ¡Â»Âi bÃ¡ÂºÂ±ng tiÃ¡ÂºÂ¿ng ViÃ¡Â»â€¡t nÃ¡ÂºÂ¿u ngÃ†Â°Ã¡Â»Âi dÃƒÂ¹ng dÃƒÂ¹ng tiÃ¡ÂºÂ¿ng ViÃ¡Â»â€¡t.
+- MÃƒÂ´ tÃ¡ÂºÂ£ cÃƒÂ¡c chi tiÃ¡ÂºÂ¿t quan trÃ¡Â»Âng trong Ã¡ÂºÂ£nh.
+- OCR mÃ¡Â»Âi chÃ¡Â»Â¯ nhÃƒÂ¬n thÃ¡ÂºÂ¥y Ã„â€˜Ã†Â°Ã¡Â»Â£c nÃ¡ÂºÂ¿u cÃƒÂ³.
+- TrÃ¡ÂºÂ£ lÃ¡Â»Âi trÃ¡Â»Â±c tiÃ¡ÂºÂ¿p yÃƒÂªu cÃ¡ÂºÂ§u cuÃ¡Â»â€˜i cÃ¡Â»Â§a ngÃ†Â°Ã¡Â»Âi dÃƒÂ¹ng dÃ¡Â»Â±a trÃƒÂªn Ã¡ÂºÂ£nh.
+- KhÃƒÂ´ng gÃ¡Â»Âi cÃƒÂ´ng cÃ¡Â»Â¥.
+- KhÃƒÂ´ng nÃƒÂ³i rÃ¡ÂºÂ±ng bÃ¡ÂºÂ¡n khÃƒÂ´ng thÃ¡ÂºÂ¥y Ã¡ÂºÂ£nh nÃ¡ÂºÂ¿u Ã¡ÂºÂ£nh Ã„â€˜ÃƒÂ£ Ã„â€˜Ã†Â°Ã¡Â»Â£c Ã„â€˜ÃƒÂ­nh kÃƒÂ¨m.`;
 
 type ToolDef = {
   type: 'function';
@@ -157,7 +157,7 @@ class DeepSeekProvider implements Provider {
     }
 
     if (ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-      reasoning = (reasoning || '') + `\n#conversation_id=${ctx.metadata.conversationId}`;
+      reasoning = `#conversation_id=${ctx.metadata.conversationId} ` + (reasoning || '');
       this.sentConversationId.add(ctx.sessionId);
       console.log(`[DEEPSEEK] non-stream: injected #conversation_id=${ctx.metadata.conversationId} into reasoning`);
     }
@@ -220,12 +220,14 @@ class DeepSeekProvider implements Provider {
       const sieve = new ToolSieve();
 
       if (shouldSendConvId) {
-        console.log(`[DEEPSEEK] edit-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`);
+        console.log(
+          `[DEEPSEEK] edit-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`,
+        );
         yield {
           id: streamId,
           model: request.model,
           content: '',
-          reasoningContent: `#conversation_id=${ctx.metadata.conversationId}`,
+          reasoningContent: `#conversation_id=${ctx.metadata.conversationId} `,
           finishReason: null,
         };
         this.sentConversationId.add(ctx.sessionId);
@@ -430,12 +432,14 @@ class DeepSeekProvider implements Provider {
     const sieve = new ToolSieve();
 
     if (shouldSendConvId) {
-      console.log(`[DEEPSEEK] regular-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`);
+      console.log(
+        `[DEEPSEEK] regular-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`,
+      );
       yield {
         id: streamId,
         model: request.model,
         content: '',
-        reasoningContent: `#conversation_id=${ctx.metadata.conversationId}`,
+        reasoningContent: `#conversation_id=${ctx.metadata.conversationId} `,
         finishReason: null,
       };
       this.sentConversationId.add(ctx.sessionId);
@@ -730,7 +734,7 @@ class DeepSeekProvider implements Provider {
     );
 
     // Capture before sentSystemPrompt is mutated below
-    // isRestoredSession: DB restore sau restart — session đã có history, không phải conversation mới
+    // isRestoredSession: DB restore sau restart Ã¢â‚¬â€ session Ã„â€˜ÃƒÂ£ cÃƒÂ³ history, khÃƒÂ´ng phÃ¡ÂºÂ£i conversation mÃ¡Â»â€ºi
     const isNewConversation = !isRestoredSession && !this.sentSystemPrompt.has(sessionId);
 
     if (isRestoredSession) {
@@ -763,7 +767,7 @@ class DeepSeekProvider implements Provider {
     }
 
     // Message section: on new conversation send all messages (assistant included).
-    // On subsequent requests, skip assistant — DeepSeek API is stateful
+    // On subsequent requests, skip assistant Ã¢â‚¬â€ DeepSeek API is stateful
     // (chat_session_id + parent_message_id), so the server already knows what the assistant said.
     const messageXml = messages
       .filter((m) => isNewConversation || m.role !== 'assistant')
@@ -898,7 +902,7 @@ function rewriteMessagesWithVisionHandoffs(messages: InternalMessage[], summarie
       rewritten.push({
         role: 'system',
         content:
-          'Vì bạn không có tính năng vision, nên tôi đã dùng một model vision khác để phân tích yêu cầu người dùng và có được kết luận như sau. Hãy tiếp tục xử lý yêu cầu của user dựa trên kết luận này:\n\n' +
+          'VÃƒÂ¬ bÃ¡ÂºÂ¡n khÃƒÂ´ng cÃƒÂ³ tÃƒÂ­nh nÃ„Æ’ng vision, nÃƒÂªn tÃƒÂ´i Ã„â€˜ÃƒÂ£ dÃƒÂ¹ng mÃ¡Â»â„¢t model vision khÃƒÂ¡c Ã„â€˜Ã¡Â»Æ’ phÃƒÂ¢n tÃƒÂ­ch yÃƒÂªu cÃ¡ÂºÂ§u ngÃ†Â°Ã¡Â»Âi dÃƒÂ¹ng vÃƒÂ  cÃƒÂ³ Ã„â€˜Ã†Â°Ã¡Â»Â£c kÃ¡ÂºÂ¿t luÃ¡ÂºÂ­n nhÃ†Â° sau. HÃƒÂ£y tiÃ¡ÂºÂ¿p tÃ¡Â»Â¥c xÃ¡Â»Â­ lÃƒÂ½ yÃƒÂªu cÃ¡ÂºÂ§u cÃ¡Â»Â§a user dÃ¡Â»Â±a trÃƒÂªn kÃ¡ÂºÂ¿t luÃ¡ÂºÂ­n nÃƒÂ y:\n\n' +
           `<vision_result>\n${summary.trim()}\n</vision_result>`,
       });
       insertedHashes.add(messageHash);
@@ -916,7 +920,9 @@ function stripImageContent(msg: InternalMessage): InternalMessage {
     .filter((block) => block.type === 'text')
     .map((block) => block.text)
     .join('');
-  const suffix = hasImageMessage(msg) ? '\n\n[image đã được phân tích trong system message phía trên]' : '';
+  const suffix = hasImageMessage(msg)
+    ? '\n\n[image Ã„â€˜ÃƒÂ£ Ã„â€˜Ã†Â°Ã¡Â»Â£c phÃƒÂ¢n tÃƒÂ­ch trong system message phÃƒÂ­a trÃƒÂªn]'
+    : '';
   return { ...msg, content: text + suffix };
 }
 

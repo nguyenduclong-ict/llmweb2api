@@ -23,7 +23,9 @@ function resolveConversationFromPromptCache(request: InternalRequest): void {
   const existing = conversationModel.getByPromptCacheKey(request.promptCacheKey);
   if (existing) {
     request.conversationId = existing.conversation_id;
-    console.log(`[PROMPT_CACHE] resolved conversationId=${existing.conversation_id} from prompt_cache_key=${request.promptCacheKey}`);
+    console.log(
+      `[PROMPT_CACHE] resolved conversationId=${existing.conversation_id} from prompt_cache_key=${request.promptCacheKey}`,
+    );
   }
 }
 

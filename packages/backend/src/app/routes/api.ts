@@ -251,7 +251,10 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
                   item_id: `rs_${responseId}`,
                   output_index: 0,
                   content_index: 0,
-                  part: { type: 'reasoning_text', text: reasoningText.replace(/\n?#conversation_id=[a-zA-Z0-9-_]+/, '').trim() },
+                  part: {
+                    type: 'reasoning_text',
+                    text: reasoningText.replace(/\n?#conversation_id=[a-zA-Z0-9-_]+/, '').trim(),
+                  },
                 }),
               );
               safeWrite(
@@ -263,7 +266,12 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
                     id: `rs_${responseId}`,
                     type: 'reasoning',
                     status: 'completed',
-                    content: [{ type: 'reasoning_text', text: reasoningText.replace(/\n?#conversation_id=[a-zA-Z0-9-_]+/, '').trim() }],
+                    content: [
+                      {
+                        type: 'reasoning_text',
+                        text: reasoningText.replace(/\n?#conversation_id=[a-zA-Z0-9-_]+/, '').trim(),
+                      },
+                    ],
                   },
                 }),
               );
@@ -274,7 +282,13 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
               sseEvent('response.output_item.added', {
                 type: 'response.output_item.added',
                 output_index: msgOutputIndex,
-                item: { id: `msg_${responseId}`, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
+                item: {
+                  id: `msg_${responseId}`,
+                  type: 'message',
+                  status: 'in_progress',
+                  role: 'assistant',
+                  content: [],
+                },
               }),
             );
             safeWrite(

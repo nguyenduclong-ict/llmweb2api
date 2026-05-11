@@ -23,7 +23,10 @@ export function getByConversationId(conversationId: string): ConversationRecord 
 
 export function getByPromptCacheKey(promptCacheKey: string): ConversationRecord | undefined {
   if (!promptCacheKey) return undefined;
-  return prepareAndGet<ConversationRecord>('SELECT * FROM conversations WHERE prompt_cache_key = ? ORDER BY last_used DESC LIMIT 1', [promptCacheKey]);
+  return prepareAndGet<ConversationRecord>(
+    'SELECT * FROM conversations WHERE prompt_cache_key = ? ORDER BY last_used DESC LIMIT 1',
+    [promptCacheKey],
+  );
 }
 
 export function updatePromptCacheKey(conversationId: string, promptCacheKey: string): void {
