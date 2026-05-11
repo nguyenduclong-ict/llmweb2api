@@ -106,6 +106,7 @@ managementRoutes.get('/settings', dashboardAuth, (_req: Request, res: Response) 
   res.json({
     dashboardPassword: getSetting('dashboard_password', 'admin123'),
     logRetentionDays: getSetting('log_retention_days', '30'),
+    logLevel: getSetting('log_level', 'basic'),
     conversationRetention: getSetting('conversation_retention', ''),
     modelMaps: {
       openai: getModelMapJson('openai'),
@@ -117,9 +118,10 @@ managementRoutes.get('/settings', dashboardAuth, (_req: Request, res: Response) 
 });
 
 managementRoutes.put('/settings', dashboardAuth, (req: Request, res: Response) => {
-  const { dashboardPassword, logRetentionDays, conversationRetention } = req.body;
+  const { dashboardPassword, logRetentionDays, logLevel, conversationRetention } = req.body;
   if (dashboardPassword) setSetting('dashboard_password', dashboardPassword);
   if (logRetentionDays) setSetting('log_retention_days', String(logRetentionDays));
+  if (logLevel) setSetting('log_level', logLevel);
   if (conversationRetention !== undefined) setSetting('conversation_retention', String(conversationRetention));
   res.json({ success: true });
 });

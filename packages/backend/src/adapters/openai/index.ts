@@ -186,11 +186,14 @@ export const openaiAdapter: Adapter = {
     const delta: Record<string, unknown> = {};
 
     if (chunk.toolCallDelta) {
-      if (chunk.toolCallDelta.id) {
+      const toolCall = { ...chunk.toolCallDelta };
+      if (toolCall.id) {
         delta.role = 'assistant';
         delta.content = null;
+      } else if (toolCall.function?.arguments !== undefined) {
+        toolCall.id = `call_stream_${chunk.id}_${toolCall.index}`;
       }
-      delta.tool_calls = [chunk.toolCallDelta];
+      delta.tool_calls = [toolCall];
     } else if (chunk.toolCalls) {
       delta.role = 'assistant';
       delta.content = null;

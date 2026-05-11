@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { prepareAndRun } from '../database';
+import { getSetting } from '../services/settingsService';
 
 const loggedRequests = new Set<string>();
 
@@ -15,7 +16,11 @@ export function loggerMiddleware(req: Request, res: Response, next: NextFunction
   const isStream = (req.body as any)?.stream === true;
   (req as any).isStream = isStream;
 
-  console.log(`[REQ] ${req.method} ${req.originalUrl} | id=${requestId} | body=${summarizeBody(req.body)}`);
+  const logLevel = getSetting('log_level', 'basic');
+
+  if (logLevel === 'full') {
+    console.log(`[REQ] ${req.method} ${req.originalUrl} | id=${requestId} | body=${summarizeBody(req.body)}`);
+  }
 
   // For streaming: intercept res.write() to capture usage from SSE chunks
   let streamInputTokens = 0;
@@ -45,9 +50,12 @@ export function loggerMiddleware(req: Request, res: Response, next: NextFunction
 
   res.on('finish', () => {
     const durationMs = Date.now() - startTime;
-    console.log(
-      `[RES] ${req.method} ${req.originalUrl} | id=${requestId} | status=${res.statusCode} | ${durationMs}ms`,
-    );
+    const logLevel2 = getSetting('log_level', 'basic');
+    if (logLevel2 === 'full') {
+      console.log(
+        `[RES] ${req.method} ${req.originalUrl} | id=${requestId} | status=${res.statusCode} | ${durationMs}ms`,
+      );
+    }
 
     if (!loggedRequests.has(requestId)) {
       loggedRequests.add(requestId);

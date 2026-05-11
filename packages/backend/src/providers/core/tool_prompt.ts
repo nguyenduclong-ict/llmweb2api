@@ -101,6 +101,13 @@ LUẬT SỐ 5 — KHÔNG thêm text ngoài marker
 Giữa các marker chỉ có khoảng trắng hoặc xuống dòng.
 KHÔNG thêm text ngoài marker. Marker mở và đóng phải đầy đủ.
 
+───────────────────────────────────────
+LUẬT SỐ 6 — paramter id, name phải required, nằm trước arguments
+───────────────────────────────────────
+
+Mỗi tool call phải có đủ 3 parameter: id, name, arguments.
+Parameter id và name phải nằm trước parameter arguments.
+
 ĐÚNG:
 [#l2a:tool_call]
 

@@ -13,6 +13,7 @@ import { Save, Download, Plus, Trash2, RotateCcw, Copy, Check, Terminal } from '
 interface AppSettings {
   dashboardPassword: string;
   logRetentionDays: string;
+  logLevel: string;
   conversationRetention: string;
   modelMaps: Record<string, Record<string, string>>;
   availableProviderModels: string[];
@@ -58,6 +59,7 @@ function getCliEndpointUrl(tool: CliTool): string {
 export default function Settings() {
   const [password, setPassword] = useState('');
   const [retentionDays, setRetentionDays] = useState('30');
+  const [logLevel, setLogLevel] = useState('basic');
   const [conversationRetention, setConversationRetention] = useState('');
   const [saved, setSaved] = useState(false);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
@@ -79,6 +81,7 @@ export default function Settings() {
     apiGet<AppSettings>('/api/settings')
       .then((data) => {
         setRetentionDays(data.logRetentionDays);
+        setLogLevel(data.logLevel || 'basic');
         setConversationRetention(data.conversationRetention || '');
       })
       .catch(console.error);
@@ -102,6 +105,7 @@ export default function Settings() {
     await apiPut('/api/settings', {
       dashboardPassword: password || undefined,
       logRetentionDays: retentionDays,
+      logLevel,
       conversationRetention,
     });
     if (password) {
@@ -433,6 +437,18 @@ console.log('Revert: ' + revertCommand);`;
           </CardHeader>
           <CardContent>
             <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="logLevel">Log Level</Label>
+                <Select value={logLevel} onValueChange={setLogLevel}>
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="basic">Basic</SelectItem>
+                    <SelectItem value="full">Full</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="grid gap-2">
                 <Label htmlFor="retention">Maximum log retention (days)</Label>
                 <Input
