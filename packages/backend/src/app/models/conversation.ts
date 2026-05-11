@@ -12,12 +12,28 @@ export interface ConversationRecord {
   tools_hash: string | null;
   last_used: string;
   last_message_id: string | null;
+  prompt_cache_key: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export function getByConversationId(conversationId: string): ConversationRecord | undefined {
   return prepareAndGet<ConversationRecord>('SELECT * FROM conversations WHERE conversation_id = ?', [conversationId]);
+}
+
+export function getByPromptCacheKey(promptCacheKey: string): ConversationRecord | undefined {
+  if (!promptCacheKey) return undefined;
+  return prepareAndGet<ConversationRecord>('SELECT * FROM conversations WHERE prompt_cache_key = ? ORDER BY last_used DESC LIMIT 1', [promptCacheKey]);
+}
+
+export function updatePromptCacheKey(conversationId: string, promptCacheKey: string): void {
+  if (!promptCacheKey || !conversationId) return;
+  prepareAndRun(
+    `INSERT INTO conversations (conversation_id, prompt_cache_key, messages, provider, input_tokens, output_tokens, last_used)
+     VALUES (?, ?, '[]', '', 0, 0, datetime('now','localtime'))
+     ON CONFLICT(conversation_id) DO UPDATE SET prompt_cache_key = excluded.prompt_cache_key, last_used = datetime('now','localtime')`,
+    [conversationId, promptCacheKey],
+  );
 }
 
 export function saveConversation(

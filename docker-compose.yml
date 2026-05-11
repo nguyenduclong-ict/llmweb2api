@@ -10,6 +10,7 @@
       - HOST=0.0.0.0
       - DASHBOARD_PASSWORD=admin123
       - DB_PATH=/app/data/app.db
+      - LLMWEB2API_DUMP_RAW_REQUESTS=0
     volumes:
       - llmweb2api_data:/app/data
 

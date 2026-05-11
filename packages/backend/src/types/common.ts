@@ -20,7 +20,15 @@ export interface AnthropicImageContent {
   };
 }
 
-export type ContentBlock = TextContent | ImageContent;
+export interface FileContent {
+  type: 'input_file';
+  file_id?: string;
+  file_url?: string;
+  file_data?: string;
+  filename?: string;
+}
+
+export type ContentBlock = TextContent | ImageContent | FileContent;
 
 export interface ToolCall {
   id: string;
@@ -65,6 +73,7 @@ export interface InternalRequest {
   toolChoice?: unknown;
   reasoningEffort?: string;
   conversationId?: string;
+  promptCacheKey?: string;
   thinkingLevel?: ThinkingLevel;
   reasoning?: unknown;
 }

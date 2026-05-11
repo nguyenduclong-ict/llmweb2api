@@ -36,6 +36,16 @@ function extractResponsesContent(item: any): string | ContentBlock[] {
         };
       }
 
+      if (part?.type === 'input_file' || part?.type === 'file') {
+        return {
+          type: 'input_file',
+          file_id: part.file_id,
+          file_url: part.file_url,
+          file_data: part.file_data,
+          filename: part.filename,
+        };
+      }
+
       return null;
     })
     .filter((part): part is ContentBlock => part !== null);
@@ -119,15 +129,17 @@ function formatResponsesUsage(internal: InternalResponse | InternalStreamChunk):
   const outTok = internal.usage.cumulativeOutputTokens ?? internal.usage.outputTokens;
   const usage: Record<string, unknown> = {
     input_tokens: inTok,
+    input_tokens_details: {
+      cached_tokens: 0,
+    },
     output_tokens: outTok,
     total_tokens: inTok + outTok,
   };
-
-  if ('reasoningTokens' in internal.usage && internal.usage.reasoningTokens !== undefined) {
-    usage.output_tokens_details = {
-      reasoning_tokens: internal.usage.reasoningTokens,
-    };
-  }
+  usage.output_tokens_details = {
+    reasoning_tokens: ('reasoningTokens' in internal.usage && internal.usage.reasoningTokens !== undefined)
+      ? internal.usage.reasoningTokens
+      : 0,
+  };
 
   return usage;
 }
@@ -144,28 +156,28 @@ function formatResponsesOutput(internal: InternalResponse): unknown[] {
     }));
   }
 
-  const content: Record<string, unknown>[] = [];
-  if (internal.reasoningContent) {
-    content.push({
-      type: 'reasoning_text',
-      text: internal.reasoningContent,
+  const cleanReasoning = internal.reasoningContent
+    ? internal.reasoningContent.replace(/\n?#conversation_id=[a-zA-Z0-9-_]+/, '').trim()
+    : '';
+
+  const output: Record<string, unknown>[] = [];
+  if (cleanReasoning) {
+    output.push({
+      id: `rs_${internal.id}`,
+      type: 'reasoning',
+      status: 'completed',
+      content: [{ type: 'reasoning_text', text: cleanReasoning }],
     });
   }
-  content.push({
-    type: 'output_text',
-    text: internal.content,
-    annotations: [],
+  output.push({
+    id: `msg_${internal.id}`,
+    type: 'message',
+    status: 'completed',
+    role: 'assistant',
+    content: [{ type: 'output_text', text: internal.content, annotations: [] }],
   });
 
-  return [
-    {
-      id: `msg_${internal.id}`,
-      type: 'message',
-      status: 'completed',
-      role: 'assistant',
-      content,
-    },
-  ];
+  return output;
 }
 
 export const openaiResponsesAdapter: Adapter & {
@@ -175,6 +187,7 @@ export const openaiResponsesAdapter: Adapter & {
     responseId: string,
     model: string,
     outputText: string,
+    reasoningText: string,
     chunk?: InternalStreamChunk,
     toolCalls?: ToolCall[],
     outputIndexBase?: number,
@@ -194,10 +207,15 @@ export const openaiResponsesAdapter: Adapter & {
     if (typeof body.instructions === 'string' && body.instructions.length > 0) {
       messages.unshift({ role: 'system', content: body.instructions });
     }
-    const conversationId =
+    const conversationId: string | undefined =
+      body.conversation?.id ??
       body.conversation_id ??
       body.previous_response_id ??
-      (typeof body.conversation === 'string' ? body.conversation : body.conversation?.id);
+      (typeof body.conversation === 'string' ? body.conversation : undefined);
+
+    if (conversationId) {
+      console.log(`[RESPONSES] parsed conversation_id=${conversationId} from request`);
+    }
 
     console.log(
       `[ADAPTER] responses request: convId=${conversationId || '<none>'} stream=${body.stream} ` +
@@ -219,6 +237,7 @@ export const openaiResponsesAdapter: Adapter & {
       toolChoice: body.tool_choice,
       reasoningEffort: resolved.thinking ? 'high' : undefined,
       conversationId,
+      promptCacheKey: body.prompt_cache_key,
       reasoning: body.reasoning,
     };
   },
@@ -230,6 +249,7 @@ export const openaiResponsesAdapter: Adapter & {
       object: 'response',
       created_at: Math.floor(Date.now() / 1000),
       status: 'completed',
+      store: true,
       error: null,
       incomplete_details: null,
       model: internal.model,
@@ -239,7 +259,10 @@ export const openaiResponsesAdapter: Adapter & {
     };
 
     if (internal.conversationId) {
-      result.conversation_id = internal.conversationId;
+      result.conversation = { id: internal.conversationId };
+      console.log(`[RESPONSES] response has conversation.id=${internal.conversationId}`);
+    } else {
+      console.log(`[RESPONSES] response MISSING conversation.id`);
     }
 
     return result;
@@ -251,6 +274,7 @@ export const openaiResponsesAdapter: Adapter & {
       object: 'response',
       created_at: Math.floor(Date.now() / 1000),
       status: 'in_progress',
+      store: true,
       model,
       output: [],
       output_text: '',
@@ -258,25 +282,7 @@ export const openaiResponsesAdapter: Adapter & {
 
     return (
       sseEvent('response.created', { type: 'response.created', response }) +
-      sseEvent('response.in_progress', { type: 'response.in_progress', response }) +
-      sseEvent('response.output_item.added', {
-        type: 'response.output_item.added',
-        output_index: 0,
-        item: {
-          id: `msg_${responseId}`,
-          type: 'message',
-          status: 'in_progress',
-          role: 'assistant',
-          content: [],
-        },
-      }) +
-      sseEvent('response.content_part.added', {
-        type: 'response.content_part.added',
-        item_id: `msg_${responseId}`,
-        output_index: 0,
-        content_index: 0,
-        part: { type: 'output_text', text: '', annotations: [] },
-      })
+      sseEvent('response.in_progress', { type: 'response.in_progress', response })
     );
   },
 
@@ -331,14 +337,19 @@ export const openaiResponsesAdapter: Adapter & {
     responseId: string,
     model: string,
     outputText: string,
+    reasoningText: string,
     chunk?: InternalStreamChunk,
     toolCalls?: ToolCall[],
     outputIndexBase = 1,
   ): string {
+    const cleanReasoning = reasoningText
+      ? reasoningText.replace(/\n?#conversation_id=[a-zA-Z0-9-_]+/, '').trim()
+      : '';
+
     if (toolCalls && toolCalls.length > 0) {
       const usage = chunk ? formatResponsesUsage(chunk) : undefined;
 
-      const output = toolCalls.map((toolCall) => ({
+      const fcOutput = toolCalls.map((toolCall) => ({
         id: toolCall.id,
         type: 'function_call',
         status: 'completed',
@@ -347,23 +358,36 @@ export const openaiResponsesAdapter: Adapter & {
         arguments: toolCall.function.arguments,
       }));
 
+      const output: Record<string, unknown>[] = [];
+      if (cleanReasoning) {
+        output.push({
+          id: `rs_${responseId}`,
+          type: 'reasoning',
+          status: 'completed',
+          content: [{ type: 'reasoning_text', text: cleanReasoning }],
+        });
+      }
+      output.push(...fcOutput);
+
       const response: Record<string, unknown> = {
         id: responseId,
         object: 'response',
         created_at: Math.floor(Date.now() / 1000),
         status: 'completed',
+        store: true,
         model,
         output,
         output_text: '',
       };
 
       if (usage) response.usage = usage;
-      if (chunk?.conversationId) response.conversation_id = chunk.conversationId;
+      if (chunk?.conversationId) response.conversation = { id: chunk.conversationId };
 
+      const hasReasoning = cleanReasoning ? 1 : 0;
       return (
-        output
+        fcOutput
           .map((item, i) => {
-            const oi = outputIndexBase + i;
+            const oi = outputIndexBase + hasReasoning + i;
             return (
               openaiResponsesAdapter.formatFunctionCallArgumentsDone(item.call_id as string, item.arguments as string) +
               sseEvent('response.output_item.done', {
@@ -381,47 +405,59 @@ export const openaiResponsesAdapter: Adapter & {
       );
     }
 
+    const output: Record<string, unknown>[] = [];
+    if (cleanReasoning) {
+      output.push({
+        id: `rs_${responseId}`,
+        type: 'reasoning',
+        status: 'completed',
+        content: [{ type: 'reasoning_text', text: cleanReasoning }],
+      });
+    }
+    const msgOutput: Record<string, unknown> = {
+      id: `msg_${responseId}`,
+      type: 'message',
+      status: 'completed',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: outputText, annotations: [] }],
+    };
+    const msgIndex = output.length;
+    output.push(msgOutput);
+
     const response: Record<string, unknown> = {
       id: responseId,
       object: 'response',
       created_at: Math.floor(Date.now() / 1000),
       status: 'completed',
+      store: true,
       model,
-      output: [
-        {
-          id: `msg_${responseId}`,
-          type: 'message',
-          status: 'completed',
-          role: 'assistant',
-          content: [{ type: 'output_text', text: outputText, annotations: [] }],
-        },
-      ],
+      output,
       output_text: outputText,
     };
 
     const usage = chunk ? formatResponsesUsage(chunk) : undefined;
     if (usage) response.usage = usage;
-    if (chunk?.conversationId) response.conversation_id = chunk.conversationId;
+    if (chunk?.conversationId) response.conversation = { id: chunk.conversationId };
 
     return (
       sseEvent('response.output_text.done', {
         type: 'response.output_text.done',
         item_id: `msg_${responseId}`,
-        output_index: 0,
+        output_index: msgIndex,
         content_index: 0,
         text: outputText,
       }) +
       sseEvent('response.content_part.done', {
         type: 'response.content_part.done',
         item_id: `msg_${responseId}`,
-        output_index: 0,
+        output_index: msgIndex,
         content_index: 0,
         part: { type: 'output_text', text: outputText, annotations: [] },
       }) +
       sseEvent('response.output_item.done', {
         type: 'response.output_item.done',
-        output_index: 0,
-        item: (response.output as unknown[])[0],
+        output_index: msgIndex,
+        item: msgOutput,
       }) +
       sseEvent('response.completed', {
         type: 'response.completed',

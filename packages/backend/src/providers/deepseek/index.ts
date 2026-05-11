@@ -156,10 +156,10 @@ class DeepSeekProvider implements Provider {
       console.error('[DEEPSEEK] Full response text:', text);
     }
 
-    // Inject conversation_id as first reasoning line (only on first message)
-    if (reasoning && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-      reasoning = `#conversation_id:${ctx.metadata.conversationId}\n` + reasoning;
+    if (ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
+      reasoning = (reasoning || '') + `\n#conversation_id=${ctx.metadata.conversationId}`;
       this.sentConversationId.add(ctx.sessionId);
+      console.log(`[DEEPSEEK] non-stream: injected #conversation_id=${ctx.metadata.conversationId} into reasoning`);
     }
 
     const inputTokens = this.estimateTokens(prompt);
@@ -211,13 +211,25 @@ class DeepSeekProvider implements Provider {
       const streamId = `ds-${Date.now()}`;
       let totalTokens = 0;
       let currentFragmentType: string | null = null;
-      let firstChunk = true;
       let gotMessageId = false;
+      const shouldSendConvId = !!(ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId));
       let hasToolCalls = false;
       let toolCallIndex = 0;
       let tcCallId = '';
       let tcName = '';
       const sieve = new ToolSieve();
+
+      if (shouldSendConvId) {
+        console.log(`[DEEPSEEK] edit-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`);
+        yield {
+          id: streamId,
+          model: request.model,
+          content: '',
+          reasoningContent: `#conversation_id=${ctx.metadata.conversationId}`,
+          finishReason: null,
+        };
+        this.sentConversationId.add(ctx.sessionId);
+      }
 
       try {
         for await (const line of client.streamEditMessageLines(ctx.token, powResponse, editPayload, signal)) {
@@ -243,18 +255,6 @@ class DeepSeekProvider implements Provider {
               if (result.content || result.reasoningContent) {
                 const content = result.content;
                 let reasoning = result.reasoningContent;
-
-                if (firstChunk && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-                  yield {
-                    id: streamId,
-                    model: request.model,
-                    content: '',
-                    reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
-                    finishReason: null,
-                  };
-                  this.sentConversationId.add(ctx.sessionId);
-                }
-                firstChunk = false;
 
                 if (content) {
                   const events = sieve.processChunk(content);
@@ -421,13 +421,25 @@ class DeepSeekProvider implements Provider {
     const streamId = `ds-${Date.now()}`;
     let totalTokens = 0;
     let currentFragmentType: string | null = null;
-    let firstChunk = true;
     let gotMessageId = false;
+    const shouldSendConvId = !!(ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId));
     let hasToolCalls = false;
     let toolCallIndex = 0;
     let tcCallId = '';
     let tcName = '';
     const sieve = new ToolSieve();
+
+    if (shouldSendConvId) {
+      console.log(`[DEEPSEEK] regular-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`);
+      yield {
+        id: streamId,
+        model: request.model,
+        content: '',
+        reasoningContent: `#conversation_id=${ctx.metadata.conversationId}`,
+        finishReason: null,
+      };
+      this.sentConversationId.add(ctx.sessionId);
+    }
 
     try {
       for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, signal)) {
@@ -453,18 +465,6 @@ class DeepSeekProvider implements Provider {
             if (result.content || result.reasoningContent) {
               const content = result.content;
               let reasoning = result.reasoningContent;
-
-              if (firstChunk && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-                yield {
-                  id: streamId,
-                  model: request.model,
-                  content: '',
-                  reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
-                  finishReason: null,
-                };
-                this.sentConversationId.add(ctx.sessionId);
-              }
-              firstChunk = false;
 
               if (content) {
                 const events = sieve.processChunk(content);
@@ -976,7 +976,7 @@ async function uploadImageRefs(token: string, refs: ImageRef[]): Promise<string[
       }
 
       const filename = `image_${Date.now()}_${i}.${ext}`;
-      console.log(`[IMAGE] Uploading ${filename} (${data.length} bytes, ${mimeType})`);
+      console.log(`[IMAGE] Uploading ${filename} (${data.length} bytes, ${mimeType} -->\n`);
       const result = await client.uploadImageFile(token, filename, data, mimeType);
       fileIds.push(result.id);
       await client.pollFileReady(token, result.id, { webHeaders: mimeType.toLowerCase().startsWith('image/') });

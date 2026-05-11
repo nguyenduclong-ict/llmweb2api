@@ -123,9 +123,10 @@ class QwenProvider implements Provider {
     const outputTokens = Math.ceil(text.length / 4);
     const cumulative = this.accumulateTokens(ctx.sessionId, inputTokens, outputTokens);
 
-    if (reasoning && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-      reasoning = `#conversation_id:${ctx.metadata.conversationId}\n` + reasoning;
+    if (ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
+      reasoning = (reasoning || '') + `\n#conversation_id=${ctx.metadata.conversationId}`;
       this.sentConversationId.add(ctx.sessionId);
+      console.log(`[QWEN] non-stream: injected #conversation_id=${ctx.metadata.conversationId} into reasoning`);
     }
 
     return {
@@ -170,7 +171,19 @@ class QwenProvider implements Provider {
       let tcCallId = '';
       let tcName = '';
       const sieve = new ToolSieve();
-      let firstChunk = true;
+      const shouldSendConvId = !!(ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId));
+
+      if (shouldSendConvId) {
+        console.log(`[QWEN] edit-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`);
+        yield {
+          id: streamId,
+          model: request.model,
+          content: '',
+          reasoningContent: `#conversation_id=${ctx.metadata.conversationId}`,
+          finishReason: null,
+        };
+        this.sentConversationId.add(ctx.sessionId);
+      }
 
       try {
         for await (const line of client.streamEditMessage(
@@ -198,18 +211,6 @@ class QwenProvider implements Provider {
             }
             const delta = chunk?.choices?.[0]?.delta;
             if (!delta && !hasResponseEvent(chunk)) continue;
-
-            if (firstChunk && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-              yield {
-                id: streamId,
-                model: request.model,
-                content: '',
-                reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
-                finishReason: null,
-              };
-              this.sentConversationId.add(ctx.sessionId);
-            }
-            firstChunk = false;
 
             const thinkingText = extractThinkingContent(chunk, delta);
             if (thinkingText) {
@@ -339,8 +340,20 @@ class QwenProvider implements Provider {
     let tcName = '';
     const debugSamples: string[] = [];
     let rawLineCount = 0;
-    let firstChunk = true;
     const sieve = new ToolSieve();
+    const shouldSendConvId = !!(ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId));
+
+    if (shouldSendConvId) {
+      console.log(`[QWEN] regular-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`);
+      yield {
+        id: streamId,
+        model: request.model,
+        content: '',
+        reasoningContent: `#conversation_id=${ctx.metadata.conversationId}`,
+        finishReason: null,
+      };
+      this.sentConversationId.add(ctx.sessionId);
+    }
 
     try {
       for await (const line of client.streamCompletion(
@@ -371,18 +384,6 @@ class QwenProvider implements Provider {
           }
           const delta = chunk?.choices?.[0]?.delta;
           if (!delta && !hasResponseEvent(chunk)) continue;
-
-          if (firstChunk && ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-            yield {
-              id: streamId,
-              model: request.model,
-              content: '',
-              reasoningContent: `#conversation_id:${ctx.metadata.conversationId}\n`,
-              finishReason: null,
-            };
-            this.sentConversationId.add(ctx.sessionId);
-          }
-          firstChunk = false;
 
           const thinkingText = extractThinkingContent(chunk, delta);
           if (thinkingText) {

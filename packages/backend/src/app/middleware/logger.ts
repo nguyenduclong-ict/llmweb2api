@@ -35,9 +35,10 @@ export function loggerMiddleware(req: Request, res: Response, next: NextFunction
         if (line.startsWith('data:') && line !== 'data: [DONE]') {
           try {
             const json = JSON.parse(line.slice(5).trim());
-            if (json.usage) {
-              streamInputTokens = json.usage.prompt_tokens ?? json.usage.input_tokens ?? 0;
-              streamOutputTokens = json.usage.completion_tokens ?? json.usage.output_tokens ?? 0;
+            if (json.usage || json.response?.usage) {
+              const usage = json.usage || json.response?.usage;
+              streamInputTokens = usage.prompt_tokens ?? usage.input_tokens ?? 0;
+              streamOutputTokens = usage.completion_tokens ?? usage.output_tokens ?? 0;
             }
           } catch {
             /* skip malformed */

@@ -84,13 +84,15 @@ export const openaiAdapter: Adapter = {
         conversationId = m.conversation_id;
       }
 
-      if (!conversationId && m.reasoning_content?.startsWith('#conversation_id:')) {
-        conversationId = m.reasoning_content.match(/#conversation_id:([a-zA-Z0-9-_]+)\n/)?.[1];
+      const msgContent = extractContent(m);
+      if (!conversationId && typeof m.reasoning_content === 'string') {
+        const match = m.reasoning_content.match(/#conversation_id=([a-zA-Z0-9-_]+)/);
+        if (match?.[1]) conversationId = match[1];
       }
 
       return {
         role: m.role ?? 'user',
-        content: extractContent(m),
+        content: msgContent,
         name: m.name,
         tool_calls: m.tool_calls,
         tool_call_id: m.tool_call_id,

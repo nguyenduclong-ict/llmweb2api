@@ -14,6 +14,25 @@ export function getProvider(name: string): Provider | undefined {
   return providerRegistry.get(name);
 }
 
+// --- Prompt Cache Key Resolution ---
+
+function resolveConversationFromPromptCache(request: InternalRequest): void {
+  if (request.conversationId) return;
+  if (!request.promptCacheKey) return;
+
+  const existing = conversationModel.getByPromptCacheKey(request.promptCacheKey);
+  if (existing) {
+    request.conversationId = existing.conversation_id;
+    console.log(`[PROMPT_CACHE] resolved conversationId=${existing.conversation_id} from prompt_cache_key=${request.promptCacheKey}`);
+  }
+}
+
+function storePromptCacheKey(conversationId: string, promptCacheKey?: string): void {
+  if (!promptCacheKey || !conversationId) return;
+  conversationModel.updatePromptCacheKey(conversationId, promptCacheKey);
+  console.log(`[PROMPT_CACHE] stored prompt_cache_key=${promptCacheKey} for conversationId=${conversationId}`);
+}
+
 // --- Session Reuse (shared by cache & non-cache flows) ---
 
 interface SessionEntry {
@@ -65,6 +84,8 @@ export async function processChat(
   request: InternalRequest,
   useCache?: boolean,
 ): Promise<{ response: InternalResponse; accountId: number; conversationId: string }> {
+  resolveConversationFromPromptCache(request);
+
   console.log(
     `[FLOW] processChat: useCache=${useCache} convId=${request.conversationId || '<none>'} model=${request.model}`,
   );
@@ -83,6 +104,7 @@ export async function processChat(
   if (isNew) {
     ctx.metadata.conversationId = ctx.sessionId;
     saveSession(ctx.sessionId, ctx.sessionId, providerName, ctx.accountId);
+    storePromptCacheKey(ctx.sessionId, request.promptCacheKey);
   }
 
   const response = await provider.chat(ctx, request);
@@ -101,6 +123,8 @@ export async function processChatStream(
   useCache?: boolean,
   signal?: AbortSignal,
 ): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
+  resolveConversationFromPromptCache(request);
+
   console.log(
     `[FLOW] processChatStream: useCache=${useCache} convId=${request.conversationId || '<none>'} model=${request.model}`,
   );
@@ -120,6 +144,7 @@ export async function processChatStream(
   if (isNew) {
     ctx.metadata.conversationId = ctx.sessionId;
     saveSession(ctx.sessionId, ctx.sessionId, providerName, ctx.accountId);
+    storePromptCacheKey(ctx.sessionId, request.promptCacheKey);
   }
 
   const innerStream = provider.chatStream(ctx, request, signal);
@@ -373,6 +398,7 @@ async function processFirstCachedChat(
   const ctx = await createSession(provider, account);
   ctx.metadata.conversationId = ctx.sessionId;
   saveSession(ctx.sessionId, ctx.sessionId, providerName, account.itemId);
+  storePromptCacheKey(ctx.sessionId, request.promptCacheKey);
 
   const response = await provider.chat(ctx, request);
 
@@ -425,6 +451,7 @@ async function processFirstCachedChatStream(
   const ctx = await createSession(provider, account);
   ctx.metadata.conversationId = ctx.sessionId;
   saveSession(ctx.sessionId, ctx.sessionId, providerName, account.itemId);
+  storePromptCacheKey(ctx.sessionId, request.promptCacheKey);
 
   const innerStream = provider.chatStream(ctx, request, signal);
   const toolsHash = hashTools(request.tools as unknown[] | undefined);

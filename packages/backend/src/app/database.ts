@@ -7,7 +7,7 @@ type DB = InstanceType<typeof Database>;
 let db: DB;
 let dbPath: string;
 
-const LATEST_SCHEMA_VERSION = 7;
+const LATEST_SCHEMA_VERSION = 8;
 
 export async function initDatabase(customPath?: string): Promise<DB> {
   dbPath = path.resolve(customPath || process.env.DB_PATH || './data/app.db');
@@ -267,6 +267,17 @@ const migrations: Migration[] = [
       const cols = getTableColumns('conversations');
       if (!cols.includes('last_message_id')) {
         db.prepare('ALTER TABLE conversations ADD COLUMN last_message_id INTEGER').run();
+      }
+    },
+  },
+  {
+    version: 8,
+    name: 'Add prompt_cache_key to conversations',
+    run: () => {
+      const cols = getTableColumns('conversations');
+      if (!cols.includes('prompt_cache_key')) {
+        db.prepare("ALTER TABLE conversations ADD COLUMN prompt_cache_key TEXT DEFAULT ''").run();
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_conv_prompt_cache_key ON conversations(prompt_cache_key)').run();
       }
     },
   },
