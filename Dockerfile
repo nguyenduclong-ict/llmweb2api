@@ -30,7 +30,6 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages/backend/package.json ./packages/backend/
 COPY --from=builder /app/packages/backend/dist ./packages/backend/dist
 COPY --from=builder /app/packages/backend/scripts ./packages/backend/scripts
-COPY --from=builder /app/packages/backend/src/providers/deepseek/pow_go ./packages/backend/dist/providers/deepseek/pow_go
 COPY --from=builder /app/packages/web/dist ./packages/web/dist
 
 RUN mkdir -p /app/data

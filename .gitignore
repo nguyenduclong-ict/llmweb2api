@@ -7,5 +7,5 @@ packages/backend/data/*
 *.log
 .DS_Store
 # Go WASM build outputs (built via "pnpm run build-pow")
-packages/backend/src/providers/deepseek/pow_go/pow.wasm
-packages/backend/src/providers/deepseek/pow_go/wasm_exec.js
+# packages/backend/src/providers/deepseek/pow_go/pow.wasm
+# packages/backend/src/providers/deepseek/pow_go/wasm_exec.js
