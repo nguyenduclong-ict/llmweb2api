@@ -20,6 +20,7 @@ export default function Providers() {
   const [items, setItems] = useState<Account[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Account | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     loadItems();
@@ -36,7 +37,11 @@ export default function Providers() {
     } else {
       await apiPost('/api/accounts', data);
     }
+    setModalOpen(false);
+    setEditingItem(null);
     await loadItems();
+    setToast('Account saved successfully');
+    setTimeout(() => setToast(null), 2000);
   }
 
   async function handleToggle(item: Account) {
@@ -136,6 +141,12 @@ export default function Providers() {
       </Card>
 
       <AccountModal open={modalOpen} onOpenChange={setModalOpen} editingAccount={editingItem} onSave={handleSave} />
+
+      {toast && (
+        <div className="fixed bottom-4 right-4 rounded-lg bg-green-100 p-4 text-green-700 shadow-lg">
+          <p className="text-sm">{toast}</p>
+        </div>
+      )}
     </div>
   );
 }

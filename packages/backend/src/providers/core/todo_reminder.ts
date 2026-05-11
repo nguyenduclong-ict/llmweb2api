@@ -37,9 +37,7 @@ export function shouldInjectTodoReminder(messages: InternalMessage[], minToolCal
         try {
           const args = JSON.parse(tc.function.arguments);
           const todos: TodoItem[] = args.todos || [];
-          const hasPending = todos.some(
-            (t: TodoItem) => t.status === 'pending' || t.status === 'in_progress',
-          );
+          const hasPending = todos.some((t: TodoItem) => t.status === 'pending' || t.status === 'in_progress');
           snapshot = { todos, hasPending };
           break;
         } catch {

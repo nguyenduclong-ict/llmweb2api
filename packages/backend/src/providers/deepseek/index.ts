@@ -794,7 +794,9 @@ class DeepSeekProvider implements Provider {
       const snapshot = shouldInjectTodoReminder(messages as InternalMessage[]);
       if (snapshot) {
         todoReminder = buildTodoReminderBlock(snapshot);
-        console.log(`[TODO_REMINDER] Injecting todo snapshot: ${snapshot.todos.length} items, hasPending=${snapshot.hasPending}`);
+        console.log(
+          `[TODO_REMINDER] Injecting todo snapshot: ${snapshot.todos.length} items, hasPending=${snapshot.hasPending}`,
+        );
       }
     }
 
@@ -1083,7 +1085,7 @@ function parseFragments(fragments: Array<Record<string, unknown>>): {
     if (t === 'THINK' || t === 'THINKING') {
       thinking += c;
       nextType = 'thinking';
-    } else if (t === 'RESPONSE') {
+    } else {
       text += c;
       nextType = 'text';
     }
@@ -1128,8 +1130,9 @@ function parseContent(chunk: Record<string, unknown>, currentFragmentType: strin
     return { content: '', reasoningContent: text, nextType: 'thinking' };
   }
 
-  // pathless chunk: {"v":" hello"} — uses tracked type
-  if (!path && currentFragmentType) {
+  // Fallback: any text chunk with unrecognized path but has text content
+  // This catches edge cases like newline-only chunks with unusual paths
+  if (currentFragmentType) {
     return {
       content: currentFragmentType === 'thinking' ? '' : text,
       reasoningContent: currentFragmentType === 'thinking' ? text : undefined,
@@ -1137,7 +1140,8 @@ function parseContent(chunk: Record<string, unknown>, currentFragmentType: strin
     };
   }
 
-  return null;
+  // Complete fallback: unrecognized chunk with text, treat as content
+  return { content: text, nextType: 'text' };
 }
 
 function hasText(s: unknown): s is string {

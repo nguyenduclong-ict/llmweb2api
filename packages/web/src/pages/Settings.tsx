@@ -67,6 +67,7 @@ export default function Settings() {
   const [selectedApiKeyId, setSelectedApiKeyId] = useState('');
   const [copiedCliSnippet, setCopiedCliSnippet] = useState(false);
   const [copiedRevertCommand, setCopiedRevertCommand] = useState(false);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
 
   const [modelMaps, setModelMaps] = useState<ModelMapsData>({
     openai: {},
@@ -89,6 +90,8 @@ export default function Settings() {
     apiGet<ModelMapsData>('/api/settings/model-maps')
       .then((data) => {
         setModelMaps(data);
+        const models = data.availableProviderModels.length ? data.availableProviderModels : DEFAULT_PROVIDER_MODELS;
+        setSelectedModels([...models]);
       })
       .catch(console.error);
 
@@ -169,6 +172,14 @@ export default function Settings() {
     URL.revokeObjectURL(url);
   }
 
+  function getSelectedProviderModels(): string[] {
+    if (selectedModels.length) return selectedModels;
+    const allModels = modelMaps.availableProviderModels.length
+      ? modelMaps.availableProviderModels
+      : DEFAULT_PROVIDER_MODELS;
+    return allModels;
+  }
+
   function buildCliSnippet(): string {
     return buildNodeCommand(buildCliSetupScript());
   }
@@ -177,9 +188,7 @@ export default function Settings() {
     const selectedKey = apiKeys.find((key) => String(key.id) === selectedApiKeyId);
     const apiKey = selectedKey?.key || '<select-api-key>';
     const baseUrl = getCliApiBaseUrl();
-    const providerModels = modelMaps.availableProviderModels.length
-      ? modelMaps.availableProviderModels
-      : DEFAULT_PROVIDER_MODELS;
+    const providerModels = getSelectedProviderModels();
     const revertCommand = buildRevertCommand();
     return `const fs = require('fs');
 const os = require('os');
@@ -314,9 +323,7 @@ console.log('Revert: ' + revertCommand);`;
     const selectedKey = apiKeys.find((key) => String(key.id) === selectedApiKeyId);
     const apiKey = selectedKey?.key || '<select-api-key>';
     const baseUrl = getCliApiBaseUrl();
-    const providerModels = modelMaps.availableProviderModels.length
-      ? modelMaps.availableProviderModels
-      : DEFAULT_PROVIDER_MODELS;
+    const providerModels = getSelectedProviderModels();
     const defaultModel = providerModels[0] || 'deepseek-v4-flash';
 
     if (selectedCli === 'codex') {
@@ -641,6 +648,50 @@ console.log('Revert: ' + revertCommand);`;
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Models to include</Label>
+              <div className="flex flex-wrap gap-3">
+                {(modelMaps.availableProviderModels.length
+                  ? modelMaps.availableProviderModels
+                  : DEFAULT_PROVIDER_MODELS
+                ).map((model) => (
+                  <label key={model} className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedModels.includes(model)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedModels([...selectedModels, model]);
+                        } else {
+                          setSelectedModels(selectedModels.filter((m) => m !== model));
+                        }
+                      }}
+                      className="h-4 w-4"
+                    />
+                    <code className="text-xs">{model}</code>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const all = modelMaps.availableProviderModels.length
+                      ? modelMaps.availableProviderModels
+                      : DEFAULT_PROVIDER_MODELS;
+                    setSelectedModels([...all]);
+                  }}
+                >
+                  Select All
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => setSelectedModels([])}>
+                  Clear All
+                </Button>
               </div>
             </div>
 

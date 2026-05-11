@@ -20,6 +20,7 @@ export default function ApiKeys() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     loadKeys();
@@ -36,7 +37,11 @@ export default function ApiKeys() {
     } else {
       return await apiPost<ApiKey>('/api/api-keys', data);
     }
+    setModalOpen(false);
+    setEditingKey(null);
     await loadKeys();
+    setToast('API key saved successfully');
+    setTimeout(() => setToast(null), 2000);
   }
 
   async function handleToggle(item: ApiKey) {
@@ -165,6 +170,12 @@ export default function ApiKeys() {
       {copiedId === -1 && (
         <div className="fixed bottom-4 right-4 rounded-lg bg-green-100 p-4 text-green-700 shadow-lg">
           <p className="text-sm">API Key copied to clipboard!</p>
+        </div>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-4 right-4 rounded-lg bg-green-100 p-4 text-green-700 shadow-lg">
+          <p className="text-sm">{toast}</p>
         </div>
       )}
     </div>
