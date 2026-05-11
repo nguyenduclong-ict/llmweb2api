@@ -13,6 +13,7 @@ import { FILE_UPLOAD_THRESHOLD } from './types';
 import { TOOL_SYSTEM_PROMPT, buildToolPrompt, block, toolBlock } from '../core/tool_prompt';
 import { parseToolCallXML } from '../core/tool_parser';
 import { ToolSieve } from '../core/tool_sieve';
+import { shouldInjectTodoReminder, buildTodoReminderBlock } from '../core/todo_reminder';
 
 interface ImageRef {
   url: string;
@@ -621,6 +622,16 @@ class QwenProvider implements Provider {
 
     const fullPrompt = [toolFileInstruction, messageXml].filter(Boolean).join('\n\n');
 
+    // Inject todo reminder if needed (Qwen is stateful so skip on new conversation)
+    let todoReminder = '';
+    if (!isNewConversation) {
+      const snapshot = shouldInjectTodoReminder(messages as InternalMessage[]);
+      if (snapshot) {
+        todoReminder = buildTodoReminderBlock(snapshot);
+        console.log(`[TODO_REMINDER] Qwen: injecting todo snapshot, ${snapshot.todos.length} items`);
+      }
+    }
+
     if (fullPrompt.length >= FILE_UPLOAD_THRESHOLD) {
       console.log(
         `[QWEN] prompt size=${fullPrompt.length} >= threshold=${FILE_UPLOAD_THRESHOLD}, uploading history as file`,
@@ -649,10 +660,11 @@ class QwenProvider implements Provider {
         toolFileInstruction,
         block('system', `Please read the attached file (${filename}) to understand the context.`),
         inlineXml,
+        todoReminder,
       ];
       prompt = fileParts.filter(Boolean).join('\n\n');
     } else {
-      prompt = fullPrompt;
+      prompt = [fullPrompt, todoReminder].filter(Boolean).join('\n\n');
     }
 
     return { content: prompt, files: uploadedFiles };

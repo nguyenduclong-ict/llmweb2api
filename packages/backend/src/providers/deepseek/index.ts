@@ -9,6 +9,7 @@ import { hashMessage } from '../core/hash';
 import { TOOL_SYSTEM_PROMPT, buildToolPrompt, block, toolBlock } from '../core/tool_prompt';
 import { ToolSieve } from '../core/tool_sieve';
 import { parseToolCallXML } from '../core/tool_parser';
+import { shouldInjectTodoReminder, buildTodoReminderBlock } from '../core/todo_reminder';
 
 interface ImageRef {
   url: string;
@@ -787,8 +788,18 @@ class DeepSeekProvider implements Provider {
       );
     }
 
+    // Inject todo reminder if needed
+    let todoReminder = '';
+    if (!isNewConversation) {
+      const snapshot = shouldInjectTodoReminder(messages as InternalMessage[]);
+      if (snapshot) {
+        todoReminder = buildTodoReminderBlock(snapshot);
+        console.log(`[TODO_REMINDER] Injecting todo snapshot: ${snapshot.todos.length} items, hasPending=${snapshot.hasPending}`);
+      }
+    }
+
     // Build full prompt with message content only (tool prompt moved to file)
-    const fullPrompt = [toolFileInstruction, messageXml].filter(Boolean).join('\n\n');
+    const fullPrompt = [toolFileInstruction, messageXml, todoReminder].filter(Boolean).join('\n\n');
 
     if (fullPrompt.length >= FILE_UPLOAD_THRESHOLD) {
       console.log(
@@ -820,6 +831,7 @@ class DeepSeekProvider implements Provider {
         toolFileInstruction,
         block('system', `Please read the attached file (${filename}) to understand the context.`),
         inlineXml,
+        todoReminder,
       ];
       prompt = fileParts.filter(Boolean).join('\n\n');
     } else {
@@ -991,6 +1003,7 @@ function buildEditMessagePrompt(request: InternalRequest): string {
   const lastTrackedIndex = findLastTrackedMessageIndex(request.messages);
   if (lastTrackedIndex < 0) return '';
 
+  let basePrompt: string;
   const lastTracked = request.messages[lastTrackedIndex];
   if (lastTracked.role === 'tool') {
     let firstToolIndex = lastTrackedIndex;
@@ -1006,10 +1019,18 @@ function buildEditMessagePrompt(request: InternalRequest): string {
       })
       .join('\n\n');
 
-    return toolBlocks;
+    basePrompt = toolBlocks;
+  } else {
+    basePrompt = messageContent(lastTracked as any);
   }
 
-  return messageContent(lastTracked as any);
+  const snapshot = shouldInjectTodoReminder(request.messages as InternalMessage[]);
+  if (snapshot) {
+    console.log(`[TODO_REMINDER] Edit flow: injecting todo snapshot, ${snapshot.todos.length} items`);
+    return basePrompt + '\n\n' + buildTodoReminderBlock(snapshot);
+  }
+
+  return basePrompt;
 }
 
 function findLastTrackedMessageIndex(messages: InternalRequest['messages']): number {
