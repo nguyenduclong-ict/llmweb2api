@@ -9,7 +9,7 @@ import { openaiResponsesAdapter } from '../../adapters/openai/responses';
 import { anthropicAdapter } from '../../adapters/anthropic';
 import { geminiAdapter } from '../../adapters/gemini';
 import { processChat, processChatStream } from '../../providers/core/manager';
-import type { InternalRequest, ToolCall } from '../../types/common';
+import type { ToolCall } from '../../types/common';
 
 export const apiRoutes: Router = Router();
 
@@ -27,37 +27,14 @@ function safeWrite(res: Response, data: string): boolean {
   return false;
 }
 
-function dumpRawChatRequest(req: Request, internalReq: InternalRequest): void {
+function dumpRawChatRequest(req: Request): void {
   if (process.env.LLMWEB2API_DUMP_RAW_REQUESTS === '0') return;
 
   try {
     const outDir = path.resolve(__dirname, '../../../data/debug');
     fs.mkdirSync(outDir, { recursive: true });
 
-    const rawMessages = Array.isArray((req.body as any)?.messages) ? ((req.body as any).messages as any[]) : [];
-    const entry = {
-      ts: new Date().toISOString(),
-      requestId: (req as any).requestId,
-      method: req.method,
-      url: req.originalUrl,
-      remoteAddress: req.ip,
-      rawSummary: {
-        model: (req.body as any)?.model,
-        stream: (req.body as any)?.stream,
-        conversation_id: (req.body as any)?.conversation_id,
-        messages: rawMessages.map((m, index) => summarizeMessage(m, index)),
-      },
-      internalSummary: {
-        model: internalReq.model,
-        providerModel: internalReq.providerModel,
-        stream: internalReq.stream,
-        conversationId: internalReq.conversationId,
-        tools: Array.isArray(internalReq.tools) ? internalReq.tools.length : 0,
-        messages: internalReq.messages.map((m, index) => summarizeMessage(m, index)),
-      },
-      rawBody: req.body,
-      internalRequest: internalReq,
-    };
+    const entry = req.body;
 
     const outFile = path.join(outDir, 'chat-completions-raw.jsonl');
     fs.appendFileSync(outFile, JSON.stringify(entry) + '\n', 'utf8');
@@ -66,45 +43,10 @@ function dumpRawChatRequest(req: Request, internalReq: InternalRequest): void {
   }
 }
 
-function summarizeMessage(m: any, index: number): Record<string, unknown> {
-  const content = m?.content;
-  const contentParts = Array.isArray(content) ? content : undefined;
-  const imageParts = contentParts?.filter((part) => part?.type === 'image_url' || part?.type === 'image') ?? [];
-  const unsupportedImageText =
-    contentParts?.some(
-      (part) =>
-        part?.type === 'text' &&
-        typeof part?.text === 'string' &&
-        part.text.includes('model does not support image input'),
-    ) ?? false;
-
-  return {
-    index,
-    role: m?.role,
-    tool_call_id: m?.tool_call_id,
-    tool_calls: Array.isArray(m?.tool_calls)
-      ? m.tool_calls.map((tc: any) => ({
-          id: tc?.id,
-          name: tc?.function?.name,
-        }))
-      : undefined,
-    conversation_id: m?.conversation_id,
-    contentType: Array.isArray(content) ? 'array' : typeof content,
-    contentParts: contentParts?.map((part) => ({
-      type: part?.type,
-      hasImageUrl: !!(part?.image_url?.url || typeof part?.image_url === 'string'),
-      textPreview: typeof part?.text === 'string' ? part.text.slice(0, 160) : undefined,
-    })),
-    imageCount: imageParts.length,
-    unsupportedImageText,
-    contentPreview: typeof content === 'string' ? content.slice(0, 240) : undefined,
-  };
-}
-
 apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Response) => {
   try {
     const internalReq = openaiAdapter.parseRequest(req.body);
-    dumpRawChatRequest(req, internalReq);
+    dumpRawChatRequest(req);
     const useCache: boolean = !!(req as any).apiKeyCache;
 
     if (req.body.stream) {
@@ -174,7 +116,7 @@ apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Re
 apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response) => {
   try {
     const internalReq = openaiResponsesAdapter.parseRequest(req.body);
-    dumpRawChatRequest(req, internalReq);
+    dumpRawChatRequest(req);
     const useCache: boolean = !!(req as any).apiKeyCache;
 
     if (req.body.stream) {

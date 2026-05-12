@@ -25,13 +25,18 @@ export function shouldInjectTodoReminder(messages: InternalMessage[], minToolCal
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
 
-    if (msg.role === 'user') break;
+    // Bỏ qua user messages (kể cả message cuối cùng) — chỉ scan assistant có tool_calls
+    if (msg.role === 'user') continue;
 
     if (msg.role !== 'assistant' || !msg.tool_calls) continue;
 
     const hasTodowrite = msg.tool_calls.some((tc) => tc.function.name === 'todowrite');
 
     if (hasTodowrite && !snapshot) {
+      // Đếm các tool calls không phải todowrite trong cùng message này
+      const siblingTools = msg.tool_calls.filter((tc) => tc.function.name !== 'todowrite').length;
+      toolCallCount += siblingTools;
+
       for (const tc of msg.tool_calls) {
         if (tc.function.name !== 'todowrite') continue;
         try {
@@ -47,9 +52,7 @@ export function shouldInjectTodoReminder(messages: InternalMessage[], minToolCal
       break;
     }
 
-    if (!hasTodowrite) {
-      toolCallCount += msg.tool_calls.length;
-    }
+    toolCallCount += msg.tool_calls.length;
   }
 
   if (!snapshot || !snapshot.hasPending) return null;
