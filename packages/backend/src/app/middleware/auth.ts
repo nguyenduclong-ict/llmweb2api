@@ -18,6 +18,5 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
   (req as any).apiKeyId = key.id;
   (req as any).apiKeyName = key.name;
-  (req as any).apiKeyCache = !!key.cache;
   next();
 }

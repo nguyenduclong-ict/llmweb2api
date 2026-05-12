@@ -43,7 +43,6 @@ class DeepSeekProvider implements Provider {
   private uploadedFileIds: string[] = [];
   private sentToolsHash = new Map<string, string>();
   private sentSystemPrompt = new Set<string>();
-  private sentConversationId = new Set<string>();
   private conversationTokens = new Map<string, { inputTokens: number; outputTokens: number }>();
 
   private accumulateTokens(
@@ -119,7 +118,9 @@ class DeepSeekProvider implements Provider {
     let reasoning = '';
     let currentFragmentType: string | null = null;
     let gotMessageId = false;
-    for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, undefined, { webHeaders: true })) {
+    for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, undefined, {
+      webHeaders: true,
+    })) {
       const raw = line.slice(5).trim();
       if (!raw) continue;
       try {
@@ -154,12 +155,6 @@ class DeepSeekProvider implements Provider {
     } else if (text.includes('[#l2a:tool_call]') && toolCalls.length === 0) {
       console.error('[DEEPSEEK] Non-stream: text contains tool_call tag but parsed 0 tool calls.');
       console.error('[DEEPSEEK] Full response text:', text);
-    }
-
-    if (ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-      reasoning = `#conversation_id=${ctx.metadata.conversationId} ` + (reasoning || '');
-      this.sentConversationId.add(ctx.sessionId);
-      console.log(`[DEEPSEEK] non-stream: injected #conversation_id=${ctx.metadata.conversationId} into reasoning`);
     }
 
     const inputTokens = this.estimateTokens(prompt);
@@ -212,29 +207,16 @@ class DeepSeekProvider implements Provider {
       let totalTokens = 0;
       let currentFragmentType: string | null = null;
       let gotMessageId = false;
-      const shouldSendConvId = !!(ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId));
       let hasToolCalls = false;
       let toolCallIndex = 0;
       let tcCallId = '';
       let tcName = '';
       const sieve = new ToolSieve();
 
-      if (shouldSendConvId) {
-        console.log(
-          `[DEEPSEEK] edit-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`,
-        );
-        yield {
-          id: streamId,
-          model: request.model,
-          content: '',
-          reasoningContent: `#conversation_id=${ctx.metadata.conversationId} `,
-          finishReason: null,
-        };
-        this.sentConversationId.add(ctx.sessionId);
-      }
-
       try {
-        for await (const line of client.streamEditMessageLines(ctx.token, powResponse, editPayload, signal, { webHeaders: true })) {
+        for await (const line of client.streamEditMessageLines(ctx.token, powResponse, editPayload, signal, {
+          webHeaders: true,
+        })) {
           if (signal?.aborted) return;
           const raw = line.slice(5).trim();
           if (!raw) continue;
@@ -424,29 +406,16 @@ class DeepSeekProvider implements Provider {
     let totalTokens = 0;
     let currentFragmentType: string | null = null;
     let gotMessageId = false;
-    const shouldSendConvId = !!(ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId));
     let hasToolCalls = false;
     let toolCallIndex = 0;
     let tcCallId = '';
     let tcName = '';
     const sieve = new ToolSieve();
 
-    if (shouldSendConvId) {
-      console.log(
-        `[DEEPSEEK] regular-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`,
-      );
-      yield {
-        id: streamId,
-        model: request.model,
-        content: '',
-        reasoningContent: `#conversation_id=${ctx.metadata.conversationId} `,
-        finishReason: null,
-      };
-      this.sentConversationId.add(ctx.sessionId);
-    }
-
     try {
-      for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, signal, { webHeaders: true })) {
+      for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, signal, {
+        webHeaders: true,
+      })) {
         if (signal?.aborted) return;
         const raw = line.slice(5).trim();
         if (!raw) continue;
@@ -608,7 +577,6 @@ class DeepSeekProvider implements Provider {
   async dispose(ctx: SessionContext): Promise<void> {
     this.sentSystemPrompt.delete(ctx.sessionId);
     this.sentToolsHash.delete(ctx.sessionId);
-    this.sentConversationId.delete(ctx.sessionId);
     this.conversationTokens.delete(ctx.sessionId);
     try {
       await client.deleteSession(ctx.token, ctx.sessionId);
@@ -684,7 +652,9 @@ class DeepSeekProvider implements Provider {
         `[VISION] temp completion session=${tempSessionId.slice(0, 12)} promptLen=${prompt.length} refFiles=${refFileIds.length}`,
       );
 
-      for await (const line of client.streamCompletionLines(token, powResponse, payload, signal, { webHeaders: true })) {
+      for await (const line of client.streamCompletionLines(token, powResponse, payload, signal, {
+        webHeaders: true,
+      })) {
         if (signal?.aborted) break;
         const raw = line.slice(5).trim();
         if (!raw) continue;

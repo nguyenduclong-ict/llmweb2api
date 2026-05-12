@@ -2,9 +2,11 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 
 import * as accountModel from '../models/account';
 import * as apiKeyModel from '../models/apiKey';
+import * as conversationModel from '../models/conversation';
 import * as logModel from '../models/log';
 import { getSetting, setSetting } from '../services/settingsService';
 import { getModelMapJson, getDefaultMaps, getAvailableProviderModels } from '../services/modelService';
+import { dumpConversation } from '../../providers/core/manager';
 
 export const managementRoutes: Router = Router();
 
@@ -67,12 +69,12 @@ managementRoutes.get('/api-keys', dashboardAuth, (_req: Request, res: Response) 
 });
 
 managementRoutes.post('/api-keys', dashboardAuth, (req: Request, res: Response) => {
-  const { name, key, cache } = req.body;
+  const { name, key } = req.body;
   if (!name) {
     res.status(400).json({ error: 'name is required' });
     return;
   }
-  res.json(apiKeyModel.createApiKey(name, key, cache));
+  res.json(apiKeyModel.createApiKey(name, key));
 });
 
 managementRoutes.put('/api-keys/:id', dashboardAuth, (req: Request, res: Response) => {
@@ -82,6 +84,16 @@ managementRoutes.put('/api-keys/:id', dashboardAuth, (req: Request, res: Respons
 
 managementRoutes.delete('/api-keys/:id', dashboardAuth, (req: Request, res: Response) => {
   apiKeyModel.deleteApiKey(Number(req.params.id));
+  res.json({ success: true });
+});
+
+// -- Sessions --
+managementRoutes.get('/sessions', dashboardAuth, (_req: Request, res: Response) => {
+  res.json(conversationModel.listSessions());
+});
+
+managementRoutes.delete('/sessions/:conversationId', dashboardAuth, async (req: Request, res: Response) => {
+  await dumpConversation(String(req.params.conversationId));
   res.json({ success: true });
 });
 
@@ -108,6 +120,7 @@ managementRoutes.get('/settings', dashboardAuth, (_req: Request, res: Response) 
     logRetentionDays: getSetting('log_retention_days', '30'),
     logLevel: getSetting('log_level', 'basic'),
     conversationRetention: getSetting('conversation_retention', ''),
+    maxMessagesPerConversation: getSetting('max_messages_per_conversation', '30'),
     modelMaps: {
       openai: getModelMapJson('openai'),
       anthropic: getModelMapJson('anthropic'),
@@ -118,11 +131,14 @@ managementRoutes.get('/settings', dashboardAuth, (_req: Request, res: Response) 
 });
 
 managementRoutes.put('/settings', dashboardAuth, (req: Request, res: Response) => {
-  const { dashboardPassword, logRetentionDays, logLevel, conversationRetention } = req.body;
+  const { dashboardPassword, logRetentionDays, logLevel, conversationRetention, maxMessagesPerConversation } = req.body;
   if (dashboardPassword) setSetting('dashboard_password', dashboardPassword);
   if (logRetentionDays) setSetting('log_retention_days', String(logRetentionDays));
   if (logLevel) setSetting('log_level', logLevel);
   if (conversationRetention !== undefined) setSetting('conversation_retention', String(conversationRetention));
+  if (maxMessagesPerConversation !== undefined) {
+    setSetting('max_messages_per_conversation', String(maxMessagesPerConversation));
+  }
   res.json({ success: true });
 });
 

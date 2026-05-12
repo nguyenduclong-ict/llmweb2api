@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom';
-import { Settings, Key, BarChart3, FileText, Zap, Server } from 'lucide-react';
+import { Settings, Key, BarChart3, FileText, Zap, Server, MessagesSquare } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const links = [
   { to: '/providers', label: 'Providers', icon: Server },
   { to: '/api-keys', label: 'API Keys', icon: Key },
   { to: '/analysis', label: 'Analysis', icon: BarChart3 },
+  { to: '/sessions', label: 'Sessions', icon: MessagesSquare },
   { to: '/logs', label: 'Logs', icon: FileText },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];

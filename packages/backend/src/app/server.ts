@@ -5,24 +5,31 @@ import fs from 'fs';
 import { apiRoutes } from './routes/api';
 import { managementRoutes } from './routes/management';
 import { statsRoutes } from './routes/stats';
-import { pruneOldConversations } from './models/conversation';
+import { listExpiredConversationIds } from './models/conversation';
 import { deleteOldLogs } from './models/log';
 import { getSetting } from './services/settingsService';
+import { dumpConversation } from '../providers/core/manager';
+
+async function cleanupConversations(maxAgeHours: number, label: string): Promise<void> {
+  const conversationIds = listExpiredConversationIds(maxAgeHours);
+  for (const conversationId of conversationIds) {
+    await dumpConversation(conversationId);
+  }
+  if (conversationIds.length > 0) {
+    console.log(`[cleanup] Pruned ${conversationIds.length} conversations (${label})`);
+  }
+}
 
 function startCleanupTimer(): void {
   setInterval(
-    () => {
+    async () => {
       try {
-        const retention = getSetting('conversation_retention', '');
+        const retention = getSetting('conversation_retention', '') ?? '';
+        const hours = parseInt(retention, 10);
         if (retention === 'immediate') {
-          const deleted = pruneOldConversations(0);
-          if (deleted > 0) console.log(`[cleanup] Pruned ${deleted} conversations (immediate)`);
-        } else if (retention === '1h') {
-          const deleted = pruneOldConversations(1);
-          if (deleted > 0) console.log(`[cleanup] Pruned ${deleted} conversations (1h)`);
-        } else if (retention === '24h') {
-          const deleted = pruneOldConversations(24);
-          if (deleted > 0) console.log(`[cleanup] Pruned ${deleted} conversations (24h)`);
+          await cleanupConversations(0, 'immediate');
+        } else if (!isNaN(hours) && hours > 0) {
+          await cleanupConversations(hours, `${hours}h`);
         }
 
         const logRetention = getSetting('log_retention_days', '');

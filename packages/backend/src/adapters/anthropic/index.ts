@@ -1,3 +1,4 @@
+import type { Request } from 'express';
 import type { Adapter } from '../../types/adapter';
 import type {
   InternalRequest,
@@ -7,6 +8,7 @@ import type {
   ContentBlock,
 } from '../../types/common';
 import { resolveModel } from '../../app/services/modelService';
+import { getSessionId } from '../../app/lib/helpers';
 
 function claudeThinkingToFlag(thinking?: { type: string; budget_tokens?: number }): boolean | undefined {
   if (!thinking) return undefined;
@@ -40,7 +42,8 @@ function extractAnthropicContent(content: any): string | ContentBlock[] {
 export const anthropicAdapter: Adapter = {
   name: 'anthropic',
 
-  parseRequest(body: any): InternalRequest {
+  parseRequest(req: Request): InternalRequest {
+    const body = req.body;
     const vendorModel = body.model ?? 'claude-3-opus-20240229';
     const resolved = resolveModel('anthropic', vendorModel, claudeThinkingToFlag(body.thinking));
 
@@ -74,7 +77,7 @@ export const anthropicAdapter: Adapter = {
       topP: body.top_p,
       stop: body.stop_sequences,
       reasoningEffort: resolved.thinking ? 'high' : undefined,
-      conversationId: body.conversation_id || undefined,
+      conversationId: getSessionId(req) || body.conversation_id || undefined,
     };
   },
 

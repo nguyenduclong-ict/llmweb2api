@@ -1,12 +1,6 @@
 import crypto from 'crypto';
 import type { Provider, SessionContext } from '../../types/provider';
-import type {
-  InternalMessage,
-  InternalRequest,
-  InternalResponse,
-  InternalStreamChunk,
-  ThinkingLevel,
-} from '../../types/common';
+import type { InternalMessage, InternalRequest, InternalResponse, InternalStreamChunk } from '../../types/common';
 import * as client from './client';
 import type { QwenFilePayload } from './types';
 import { FILE_UPLOAD_THRESHOLD } from './types';
@@ -30,7 +24,6 @@ class QwenProvider implements Provider {
   readonly name = 'qwen';
   private sentToolsHash = new Map<string, string>();
   private sentSystemPrompt = new Set<string>();
-  private sentConversationId = new Set<string>();
   private conversationTokens = new Map<string, { inputTokens: number; outputTokens: number }>();
 
   private accumulateTokens(
@@ -123,12 +116,6 @@ class QwenProvider implements Provider {
     const outputTokens = Math.ceil(text.length / 4);
     const cumulative = this.accumulateTokens(ctx.sessionId, inputTokens, outputTokens);
 
-    if (ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId)) {
-      reasoning = `#conversation_id=${ctx.metadata.conversationId} ` + (reasoning || '');
-      this.sentConversationId.add(ctx.sessionId);
-      console.log(`[QWEN] non-stream: injected #conversation_id=${ctx.metadata.conversationId} into reasoning`);
-    }
-
     return {
       id: `qwen-${Date.now()}`,
       model: request.model,
@@ -171,21 +158,6 @@ class QwenProvider implements Provider {
       let tcCallId = '';
       let tcName = '';
       const sieve = new ToolSieve();
-      const shouldSendConvId = !!(ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId));
-
-      if (shouldSendConvId) {
-        console.log(
-          `[QWEN] edit-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`,
-        );
-        yield {
-          id: streamId,
-          model: request.model,
-          content: '',
-          reasoningContent: `#conversation_id=${ctx.metadata.conversationId} `,
-          finishReason: null,
-        };
-        this.sentConversationId.add(ctx.sessionId);
-      }
 
       try {
         for await (const line of client.streamEditMessage(
@@ -343,21 +315,6 @@ class QwenProvider implements Provider {
     const debugSamples: string[] = [];
     let rawLineCount = 0;
     const sieve = new ToolSieve();
-    const shouldSendConvId = !!(ctx.metadata.conversationId && !this.sentConversationId.has(ctx.sessionId));
-
-    if (shouldSendConvId) {
-      console.log(
-        `[QWEN] regular-stream: injecting #conversation_id=${ctx.metadata.conversationId} into reasoningContent chunk (before loop)`,
-      );
-      yield {
-        id: streamId,
-        model: request.model,
-        content: '',
-        reasoningContent: `#conversation_id=${ctx.metadata.conversationId} `,
-        finishReason: null,
-      };
-      this.sentConversationId.add(ctx.sessionId);
-    }
 
     try {
       for await (const line of client.streamCompletion(
@@ -513,7 +470,6 @@ class QwenProvider implements Provider {
   async dispose(ctx: SessionContext): Promise<void> {
     this.sentSystemPrompt.delete(ctx.sessionId);
     this.sentToolsHash.delete(ctx.sessionId);
-    this.sentConversationId.delete(ctx.sessionId);
     this.conversationTokens.delete(ctx.sessionId);
     if (!ctx.sessionId) return;
     try {

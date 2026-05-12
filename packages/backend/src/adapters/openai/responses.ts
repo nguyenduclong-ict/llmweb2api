@@ -1,3 +1,4 @@
+import type { Request } from 'express';
 import type { Adapter } from '../../types/adapter';
 import type {
   InternalRequest,
@@ -8,6 +9,7 @@ import type {
   ToolCall,
 } from '../../types/common';
 import { resolveModel } from '../../app/services/modelService';
+import { getSessionId } from '../../app/lib/helpers';
 import { resolveThinking, countImageBlocks, countUnsupportedImageErrors, sseEvent } from './index';
 
 function extractResponsesContent(item: any): string | ContentBlock[] {
@@ -157,9 +159,7 @@ function formatResponsesOutput(internal: InternalResponse): unknown[] {
     }));
   }
 
-  const cleanReasoning = internal.reasoningContent
-    ? internal.reasoningContent.replace(/#conversation_id=[a-fA-F0-9-]{36}\s?/, '').trim()
-    : '';
+  const cleanReasoning = internal.reasoningContent ? internal.reasoningContent.trim() : '';
 
   const output: Record<string, unknown>[] = [];
   if (cleanReasoning) {
@@ -199,7 +199,8 @@ export const openaiResponsesAdapter: Adapter & {
 } = {
   name: 'openai-responses',
 
-  parseRequest(body: any): InternalRequest {
+  parseRequest(req: Request): InternalRequest {
+    const body = req.body;
     const vendorModel = body.model ?? 'gpt-3.5-turbo';
     const thinkingResolved = resolveThinking(body);
     const resolved = resolveModel('openai', vendorModel, thinkingResolved.thinking, thinkingResolved.thinkingLevel);
@@ -209,10 +210,11 @@ export const openaiResponsesAdapter: Adapter & {
       messages.unshift({ role: 'system', content: body.instructions });
     }
     const conversationId: string | undefined =
-      body.conversation?.id ??
-      body.conversation_id ??
-      body.previous_response_id ??
-      (typeof body.conversation === 'string' ? body.conversation : undefined);
+      getSessionId(req) ||
+      (body.conversation?.id ??
+        body.conversation_id ??
+        body.previous_response_id ??
+        (typeof body.conversation === 'string' ? body.conversation : undefined));
 
     if (conversationId) {
       console.log(`[RESPONSES] parsed conversation_id=${conversationId} from request`);
@@ -343,9 +345,7 @@ export const openaiResponsesAdapter: Adapter & {
     toolCalls?: ToolCall[],
     outputIndexBase = 1,
   ): string {
-    const cleanReasoning = reasoningText
-      ? reasoningText.replace(/#conversation_id=[a-fA-F0-9-]{36}\s?/, '').trim()
-      : '';
+    const cleanReasoning = reasoningText ? reasoningText.trim() : '';
 
     if (toolCalls && toolCalls.length > 0) {
       const usage = chunk ? formatResponsesUsage(chunk) : undefined;

@@ -1,3 +1,4 @@
+import type { Request } from 'express';
 import type { Adapter } from '../../types/adapter';
 import type {
   InternalRequest,
@@ -7,6 +8,7 @@ import type {
   ContentBlock,
 } from '../../types/common';
 import { resolveModel } from '../../app/services/modelService';
+import { getSessionId } from '../../app/lib/helpers';
 
 function extractGeminiContent(part: any): string {
   if (typeof part === 'string') return part;
@@ -52,7 +54,8 @@ function geminiThinkingToFlag(config?: any): boolean | undefined {
 export const geminiAdapter: Adapter = {
   name: 'gemini',
 
-  parseRequest(body: any): InternalRequest {
+  parseRequest(req: Request): InternalRequest {
+    const body = req.body;
     const vendorModel = body.modelOverride ?? 'gemini-pro';
     const genConfig = body.generationConfig ?? {};
     const resolved = resolveModel('gemini', vendorModel, geminiThinkingToFlag(genConfig));
@@ -86,7 +89,7 @@ export const geminiAdapter: Adapter = {
       topP: genConfig.topP,
       stop: genConfig.stopSequences,
       reasoningEffort: resolved.thinking ? 'high' : undefined,
-      conversationId: body.conversation_id || undefined,
+      conversationId: getSessionId(req) || body.conversation_id || undefined,
     };
   },
 

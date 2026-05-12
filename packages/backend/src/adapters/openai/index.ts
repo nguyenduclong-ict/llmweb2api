@@ -1,3 +1,4 @@
+import type { Request } from 'express';
 import type { Adapter } from '../../types/adapter';
 import type {
   InternalRequest,
@@ -8,6 +9,7 @@ import type {
   ThinkingLevel,
 } from '../../types/common';
 import { resolveModel } from '../../app/services/modelService';
+import { getSessionId } from '../../app/lib/helpers';
 
 export function resolveThinking(body: any): { thinking?: boolean; thinkingLevel?: ThinkingLevel } {
   const thinkingType = body?.thinking?.type as string | undefined;
@@ -72,12 +74,14 @@ export function countUnsupportedImageErrors(messages: InternalMessage[]): number
 export const openaiAdapter: Adapter = {
   name: 'openai',
 
-  parseRequest(body: any): InternalRequest {
+  parseRequest(req: Request): InternalRequest {
+    const body = req.body;
     const vendorModel = body.model ?? 'gpt-3.5-turbo';
     const thinkingResolved = resolveThinking(body);
     const resolved = resolveModel('openai', vendorModel, thinkingResolved.thinking, thinkingResolved.thinkingLevel);
 
-    let conversationId = body.conversation_id;
+    const requestSessionId = getSessionId(req);
+    let conversationId = requestSessionId || body.conversation_id;
 
     const messages: InternalMessage[] = (body.messages ?? []).map((m: any) => {
       if (!conversationId && m.conversation_id) {
@@ -85,10 +89,6 @@ export const openaiAdapter: Adapter = {
       }
 
       const msgContent = extractContent(m);
-      if (!conversationId && typeof m.reasoning_content === 'string' && m.reasoning_content.startsWith('#conversation_id=')) {
-        conversationId = m.reasoning_content.split(' ')[0].split('#conversation_id=')[1]?.trim();
-      }
-
       return {
         role: m.role ?? 'user',
         content: msgContent,
@@ -100,7 +100,9 @@ export const openaiAdapter: Adapter = {
 
     if (conversationId !== body.conversation_id) {
       console.log(
-        `[ADAPTER] Detected conversationId=${conversationId} from ${body.conversation_id ? 'body' : 'message field'}`,
+        `[ADAPTER] Detected conversationId=${conversationId} from ${
+          requestSessionId ? 'request session' : body.conversation_id ? 'body' : 'message field'
+        }`,
       );
     }
     console.log(

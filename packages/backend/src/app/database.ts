@@ -7,7 +7,7 @@ type DB = InstanceType<typeof Database>;
 let db: DB;
 let dbPath: string;
 
-const LATEST_SCHEMA_VERSION = 8;
+const LATEST_SCHEMA_VERSION = 10;
 
 export async function initDatabase(customPath?: string): Promise<DB> {
   dbPath = path.resolve(customPath || process.env.DB_PATH || './data/app.db');
@@ -91,7 +91,6 @@ const migrations: Migration[] = [
           id          INTEGER PRIMARY KEY AUTOINCREMENT,
           key         TEXT NOT NULL UNIQUE,
           name        TEXT NOT NULL,
-          cache       INTEGER NOT NULL DEFAULT 0,
           enabled     INTEGER NOT NULL DEFAULT 1,
           created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
           updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
@@ -134,12 +133,18 @@ const migrations: Migration[] = [
       db.prepare(
         `
         CREATE TABLE IF NOT EXISTS conversations (
-          conversation_id TEXT PRIMARY KEY,
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          conversation_id TEXT NOT NULL,
+          seq             INTEGER NOT NULL DEFAULT 0,
           account_id     INTEGER REFERENCES accounts(id),
-          provider       TEXT NOT NULL,
+          provider       TEXT NOT NULL DEFAULT '',
+          metadata       TEXT NOT NULL DEFAULT '{}',
           messages       TEXT NOT NULL DEFAULT '[]',
+          tracked_count  INTEGER NOT NULL DEFAULT 0,
+          tracked_hash   TEXT NOT NULL DEFAULT '',
           created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-          updated_at     TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+          updated_at     TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+          UNIQUE(conversation_id, seq)
         )
       `,
       ).run();
@@ -279,6 +284,86 @@ const migrations: Migration[] = [
         db.prepare("ALTER TABLE conversations ADD COLUMN prompt_cache_key TEXT DEFAULT ''").run();
         db.prepare('CREATE INDEX IF NOT EXISTS idx_conv_prompt_cache_key ON conversations(prompt_cache_key)').run();
       }
+    },
+  },
+  {
+    version: 9,
+    name: 'Remove cache flag from API keys',
+    run: () => {
+      const cols = getTableColumns('api_keys');
+      if (cols.includes('cache')) {
+        db.prepare('ALTER TABLE api_keys DROP COLUMN cache').run();
+      }
+    },
+  },
+  {
+    version: 10,
+    name: 'Use sequenced conversation state metadata',
+    run: () => {
+      const cols = getTableColumns('conversations');
+      if (cols.includes('seq') && cols.includes('metadata')) {
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_conv_latest ON conversations(conversation_id, seq DESC)').run();
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_conv_prompt_cache_key ON conversations(prompt_cache_key)').run();
+        return;
+      }
+
+      db.prepare(
+        `
+        CREATE TABLE conversations_new (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          conversation_id TEXT NOT NULL,
+          seq             INTEGER NOT NULL DEFAULT 0,
+          account_id     INTEGER REFERENCES accounts(id),
+          provider       TEXT NOT NULL DEFAULT '',
+          metadata       TEXT NOT NULL DEFAULT '{}',
+          messages       TEXT NOT NULL DEFAULT '[]',
+          tracked_count  INTEGER NOT NULL DEFAULT 0,
+          tracked_hash   TEXT NOT NULL DEFAULT '',
+          input_tokens   INTEGER NOT NULL DEFAULT 0,
+          output_tokens  INTEGER NOT NULL DEFAULT 0,
+          tools_hash     TEXT DEFAULT '',
+          last_used      TEXT,
+          last_message_id TEXT,
+          prompt_cache_key TEXT DEFAULT '',
+          created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+          updated_at     TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+          UNIQUE(conversation_id, seq)
+        )
+      `,
+      ).run();
+
+      db.prepare(
+        `
+        INSERT INTO conversations_new (
+          conversation_id, seq, account_id, provider, metadata, messages, tracked_count, tracked_hash,
+          input_tokens, output_tokens, tools_hash, last_used, last_message_id, prompt_cache_key,
+          created_at, updated_at
+        )
+        SELECT
+          conversation_id,
+          0,
+          account_id,
+          provider,
+          json_object('providerSessionId', conversation_id),
+          COALESCE(messages, '[]'),
+          0,
+          '',
+          COALESCE(input_tokens, 0),
+          COALESCE(output_tokens, 0),
+          COALESCE(tools_hash, ''),
+          COALESCE(last_used, created_at),
+          last_message_id,
+          COALESCE(prompt_cache_key, ''),
+          created_at,
+          updated_at
+        FROM conversations
+      `,
+      ).run();
+
+      db.prepare('DROP TABLE conversations').run();
+      db.prepare('ALTER TABLE conversations_new RENAME TO conversations').run();
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_conv_latest ON conversations(conversation_id, seq DESC)').run();
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_conv_prompt_cache_key ON conversations(prompt_cache_key)').run();
     },
   },
 ];

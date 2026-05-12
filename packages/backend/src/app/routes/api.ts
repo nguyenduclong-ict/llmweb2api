@@ -1,6 +1,4 @@
 import { Router, type Request, type Response } from 'express';
-import fs from 'fs';
-import path from 'path';
 import { authMiddleware } from '../middleware/auth';
 import { loggerMiddleware } from '../middleware/logger';
 import { rateLimitMiddleware } from '../middleware/rateLimit';
@@ -9,7 +7,7 @@ import { openaiResponsesAdapter } from '../../adapters/openai/responses';
 import { anthropicAdapter } from '../../adapters/anthropic';
 import { geminiAdapter } from '../../adapters/gemini';
 import { processChat, processChatStream } from '../../providers/core/manager';
-import type { ToolCall } from '../../types/common';
+import type { InternalRequest, ToolCall } from '../../types/common';
 
 export const apiRoutes: Router = Router();
 
@@ -27,27 +25,26 @@ function safeWrite(res: Response, data: string): boolean {
   return false;
 }
 
-function dumpRawChatRequest(req: Request): void {
-  if (process.env.LLMWEB2API_DUMP_RAW_REQUESTS === '0') return;
+function resolveUseCache(req: Request, internalReq: InternalRequest): boolean {
+  const body = req.body as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(body, 'useCache')) {
+    return !!body.useCache;
+  }
+  return !!internalReq.conversationId && !!internalReq.tools?.length;
+}
 
-  try {
-    const outDir = path.resolve(__dirname, '../../../data/debug');
-    fs.mkdirSync(outDir, { recursive: true });
-
-    const entry = req.body;
-
-    const outFile = path.join(outDir, 'chat-completions-raw.jsonl');
-    fs.appendFileSync(outFile, JSON.stringify(entry) + '\n', 'utf8');
-  } catch (err) {
-    console.error('[RAW_DUMP] Failed to write chat request dump:', (err as Error).message);
+function detachConversationWhenCacheDisabled(internalReq: InternalRequest, useCache: boolean): void {
+  if (!useCache) {
+    internalReq.conversationId = undefined;
   }
 }
 
 apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Response) => {
   try {
-    const internalReq = openaiAdapter.parseRequest(req.body);
-    dumpRawChatRequest(req);
-    const useCache: boolean = !!(req as any).apiKeyCache;
+    console.log(`[API] ${req.method} ${req.originalUrl} called with headers:`, req.headers);
+    const internalReq = openaiAdapter.parseRequest(req);
+    const useCache = resolveUseCache(req, internalReq);
+    detachConversationWhenCacheDisabled(internalReq, useCache);
 
     if (req.body.stream) {
       const controller = new AbortController();
@@ -115,9 +112,10 @@ apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Re
 
 apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response) => {
   try {
-    const internalReq = openaiResponsesAdapter.parseRequest(req.body);
-    dumpRawChatRequest(req);
-    const useCache: boolean = !!(req as any).apiKeyCache;
+    console.log(`[API] ${req.method} ${req.originalUrl} called with headers:`, req.headers);
+    const internalReq = openaiResponsesAdapter.parseRequest(req);
+    const useCache = resolveUseCache(req, internalReq);
+    detachConversationWhenCacheDisabled(internalReq, useCache);
 
     if (req.body.stream) {
       const controller = new AbortController();
@@ -195,7 +193,7 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
                   content_index: 0,
                   part: {
                     type: 'reasoning_text',
-                    text: reasoningText.replace(/\n?#conversation_id=[a-zA-Z0-9-_]+/, '').trim(),
+                    text: reasoningText.trim(),
                   },
                 }),
               );
@@ -211,7 +209,7 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
                     content: [
                       {
                         type: 'reasoning_text',
-                        text: reasoningText.replace(/\n?#conversation_id=[a-zA-Z0-9-_]+/, '').trim(),
+                        text: reasoningText.trim(),
                       },
                     ],
                   },
@@ -336,8 +334,9 @@ apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response)
 
 apiRoutes.post('/v1/messages', apiPipeline, async (req: Request, res: Response) => {
   try {
-    const internalReq = anthropicAdapter.parseRequest(req.body);
-    const useCache: boolean = !!(req as any).apiKeyCache;
+    const internalReq = anthropicAdapter.parseRequest(req);
+    const useCache = resolveUseCache(req, internalReq);
+    detachConversationWhenCacheDisabled(internalReq, useCache);
     if (req.body.stream) {
       const controller = new AbortController();
       res.on('close', () => {
@@ -409,8 +408,9 @@ apiRoutes.post('/v1/messages', apiPipeline, async (req: Request, res: Response) 
 
 apiRoutes.post('/v1/models/:modelModel', apiPipeline, async (req: Request, res: Response) => {
   try {
-    const internalReq = geminiAdapter.parseRequest(req.body);
-    const useCache: boolean = !!(req as any).apiKeyCache;
+    const internalReq = geminiAdapter.parseRequest(req);
+    const useCache = resolveUseCache(req, internalReq);
+    detachConversationWhenCacheDisabled(internalReq, useCache);
     if (req.body.stream) {
       const controller = new AbortController();
       res.on('close', () => {

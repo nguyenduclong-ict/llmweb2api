@@ -3,13 +3,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Switch } from './ui/switch';
 
 interface ApiKey {
   id: number;
   key: string;
   name: string;
-  cache: number;
   enabled: number;
   created_at: string;
 }
@@ -35,7 +33,6 @@ function ApiKeyForm({
 }) {
   const [name, setName] = useState(editingKey ? editingKey.name : '');
   const [key, setKey] = useState('');
-  const [cache, setCache] = useState(editingKey ? !!editingKey.cache : true);
 
   const generateKey = () => {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -46,9 +43,7 @@ function ApiKeyForm({
 
   const handleSave = async () => {
     if (!name.trim()) return;
-    const result = await onSave(
-      editingKey ? { name: name.trim(), cache } : { name: name.trim(), key: key || undefined, cache },
-    );
+    const result = await onSave(editingKey ? { name: name.trim() } : { name: name.trim(), key: key || undefined });
     if (!editingKey && result && 'key' in result && onKeyGenerated) {
       onKeyGenerated(result.key);
     }
@@ -78,10 +73,6 @@ function ApiKeyForm({
             </div>
           </div>
         )}
-        <div className="flex items-center justify-between">
-          <Label htmlFor="cache">Enable cache</Label>
-          <Switch id="cache" checked={cache} onCheckedChange={setCache} />
-        </div>
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onCancel}>

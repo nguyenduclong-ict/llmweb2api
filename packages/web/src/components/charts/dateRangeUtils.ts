@@ -1,6 +1,14 @@
 import { startOfWeek, startOfMonth, format, subDays } from 'date-fns';
 
-export type DateRangePreset = 'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'last7days' | 'last30days' | 'custom';
+export type DateRangePreset =
+  | 'today'
+  | 'yesterday'
+  | 'thisWeek'
+  | 'thisMonth'
+  | 'last3days'
+  | 'last7days'
+  | 'last30days'
+  | 'custom';
 
 export interface DateRange {
   preset: DateRangePreset;
@@ -45,6 +53,12 @@ export function getDateRange(preset: DateRangePreset): DateRange {
         startDate: formatDate(startOfMonth(now)),
         endDate: toEndOfDay(now),
       };
+    case 'last3days':
+      return {
+        preset,
+        startDate: formatDate(subDays(now, 3)),
+        endDate: toEndOfDay(now),
+      };
     case 'last7days':
       return {
         preset,
@@ -72,6 +86,7 @@ export function getGranularityForRange(preset: DateRangePreset): 'hour' | 'day' 
     case 'yesterday':
       return 'hour';
     case 'thisWeek':
+    case 'last3days':
     case 'last7days':
       return 'day';
     case 'thisMonth':

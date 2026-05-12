@@ -9,12 +9,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Textarea } from '../components/ui/textarea';
 import { Save, Download, Plus, Trash2, RotateCcw, Copy, Check, Terminal } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface AppSettings {
   dashboardPassword: string;
   logRetentionDays: string;
   logLevel: string;
   conversationRetention: string;
+  maxMessagesPerConversation: string;
   modelMaps: Record<string, Record<string, string>>;
   availableProviderModels: string[];
 }
@@ -31,7 +33,6 @@ interface ApiKey {
   id: number;
   key: string;
   name: string;
-  cache: number;
   enabled: number;
   created_at: string;
 }
@@ -39,6 +40,7 @@ interface ApiKey {
 type CliTool = 'codex' | 'opencode';
 
 const ADAPTERS = [{ key: 'openai', label: 'OpenAI' }] as const;
+type AdapterKey = (typeof ADAPTERS)[number]['key'];
 
 const CLI_TOOLS: Array<{ key: CliTool; label: string }> = [
   { key: 'codex', label: 'Codex' },
@@ -61,7 +63,7 @@ export default function Settings() {
   const [retentionDays, setRetentionDays] = useState('30');
   const [logLevel, setLogLevel] = useState('basic');
   const [conversationRetention, setConversationRetention] = useState('');
-  const [saved, setSaved] = useState(false);
+  const [maxMessagesPerConversation, setMaxMessagesPerConversation] = useState('30');
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [selectedCli, setSelectedCli] = useState<CliTool>('codex');
   const [selectedApiKeyId, setSelectedApiKeyId] = useState('');
@@ -84,6 +86,7 @@ export default function Settings() {
         setRetentionDays(data.logRetentionDays);
         setLogLevel(data.logLevel || 'basic');
         setConversationRetention(data.conversationRetention || '');
+        setMaxMessagesPerConversation(data.maxMessagesPerConversation || '30');
       })
       .catch(console.error);
 
@@ -110,54 +113,62 @@ export default function Settings() {
       logRetentionDays: retentionDays,
       logLevel,
       conversationRetention,
+      maxMessagesPerConversation,
     });
     if (password) {
       localStorage.setItem('dashboard_password', password);
       setPassword('');
     }
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    toast.success('Settings saved');
   }
 
   async function handleSaveModelMaps(adapter: string) {
     await apiPut('/api/settings/model-maps', {
       [adapter]: (modelMaps as any)[adapter] || {},
     });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    toast.success('Model mappings saved');
   }
 
-  function handleMapChange(adapter: string, vendorModel: string, providerModel: string) {
+  function getProviderModelFallback(): string {
+    return modelMaps.availableProviderModels[0] || DEFAULT_PROVIDER_MODELS[0];
+  }
+
+  function handleMapChange(adapter: AdapterKey, vendorModel: string, providerModel: string) {
     setModelMaps((prev) => ({
       ...prev,
-      [adapter]: { ...((prev as any)[adapter] as Record<string, string>), [vendorModel]: providerModel },
+      [adapter]: {
+        ...prev[adapter],
+        [vendorModel]: providerModel,
+      },
     }));
   }
 
-  function handleRemoveMapping(adapter: string, vendorModel: string) {
+  function handleRemoveMapping(adapter: AdapterKey, vendorModel: string) {
     setModelMaps((prev) => {
-      const map = (prev as any)[adapter] as Record<string, string>;
-      if (!map || typeof map !== 'object' || Array.isArray(map)) return prev;
-      const copy: Record<string, string> = { ...map };
-      delete copy[vendorModel];
-      return { ...prev, [adapter]: copy };
+      const nextMap = { ...prev[adapter] };
+      delete nextMap[vendorModel];
+      return { ...prev, [adapter]: nextMap };
     });
   }
 
-  function handleAddMapping(adapter: string) {
-    // eslint-disable-next-line react-hooks/purity
-    const newKey = `new-model-${Date.now()}`;
-    const defaultProvider = modelMaps.availableProviderModels[0] || 'deepseek-v4-flash';
-    setModelMaps((prev) => ({
-      ...prev,
-      [adapter]: { ...((prev as any)[adapter] as Record<string, string>), [newKey]: defaultProvider },
-    }));
+  function handleAddMapping(adapter: AdapterKey) {
+    setModelMaps((prev) => {
+      const nextMap = { ...prev[adapter] };
+      let index = Object.keys(nextMap).length + 1;
+      let vendorModel = `vendor-model-${index}`;
+      while (vendorModel in nextMap) {
+        index += 1;
+        vendorModel = `vendor-model-${index}`;
+      }
+      nextMap[vendorModel] = getProviderModelFallback();
+      return { ...prev, [adapter]: nextMap };
+    });
   }
 
-  function handleResetMaps(adapter: string) {
+  function handleResetMaps(adapter: AdapterKey) {
     setModelMaps((prev) => ({
       ...prev,
-      [adapter]: { ...(((modelMaps.defaults as any)[adapter] as Record<string, string>) || {}) },
+      [adapter]: { ...(prev.defaults[adapter] || {}) },
     }));
   }
 
@@ -170,6 +181,7 @@ export default function Settings() {
     a.download = 'llmweb2api-config.json';
     a.click();
     URL.revokeObjectURL(url);
+    toast.success('Config exported');
   }
 
   function getSelectedProviderModels(): string[] {
@@ -421,7 +433,7 @@ console.log('Revert: ' + revertCommand);`;
             <CardTitle>Dashboard Security</CardTitle>
             <CardDescription>Update your dashboard access password</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="grid gap-4">
             <div className="grid gap-4">
               <div className="grid gap-2">
                 <Label htmlFor="password">New Password (leave empty to keep current)</Label>
@@ -442,7 +454,7 @@ console.log('Revert: ' + revertCommand);`;
             <CardTitle>Log Management</CardTitle>
             <CardDescription>Configure log retention and cleanup</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="grid gap-4">
             <div className="grid gap-4">
               <div className="grid gap-2">
                 <Label htmlFor="logLevel">Log Level</Label>
@@ -461,6 +473,7 @@ console.log('Revert: ' + revertCommand);`;
                 <Input
                   id="retention"
                   type="number"
+                  className="w-24"
                   value={retentionDays}
                   onChange={(e) => setRetentionDays(e.target.value)}
                   min="1"
@@ -476,7 +489,7 @@ console.log('Revert: ' + revertCommand);`;
             <CardTitle>Conversation Cleanup</CardTitle>
             <CardDescription>Auto-delete conversations after specified time</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="grid gap-4">
             <div className="grid gap-2">
               <Label htmlFor="conversation">Auto-delete conversations after</Label>
               <Select value={conversationRetention} onValueChange={setConversationRetention}>
@@ -485,11 +498,26 @@ console.log('Revert: ' + revertCommand);`;
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="never">Never</SelectItem>
-                  <SelectItem value="immediate">Immediately (ignored if cache is enabled)</SelectItem>
+                  <SelectItem value="immediate">Immediately</SelectItem>
                   <SelectItem value="1h">1 Hour</SelectItem>
                   <SelectItem value="24h">24 Hours (1 Day)</SelectItem>
+                  <SelectItem value="72h">3 Days</SelectItem>
+                  <SelectItem value="168h">7 Days</SelectItem>
+                  <SelectItem value="720h">30 Days</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="maxMessagesPerConversation">Max messages per conversation</Label>
+              <Input
+                id="maxMessagesPerConversation"
+                className="w-24"
+                type="number"
+                value={maxMessagesPerConversation}
+                onChange={(e) => setMaxMessagesPerConversation(e.target.value)}
+                min="0"
+                placeholder="Disabled"
+              />
             </div>
           </CardContent>
         </Card>
@@ -762,7 +790,6 @@ console.log('Revert: ' + revertCommand);`;
           <Save className="mr-2 h-4 w-4" />
           Save Settings
         </Button>
-        {saved && <span className="text-sm text-green-600">Saved!</span>}
       </div>
     </div>
   );

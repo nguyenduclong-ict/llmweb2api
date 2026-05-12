@@ -5,49 +5,53 @@ export interface ApiKeyRecord {
   id: number;
   key: string;
   name: string;
-  cache: number;
   enabled: number;
-  rate_limit: number;
   created_at: string;
   updated_at: string;
 }
 
 export function getAllApiKeys(): ApiKeyRecord[] {
-  return prepareAndAll<ApiKeyRecord>('SELECT * FROM api_keys ORDER BY created_at DESC');
+  return prepareAndAll<ApiKeyRecord>(
+    'SELECT id, key, name, enabled, created_at, updated_at FROM api_keys ORDER BY created_at DESC',
+  );
 }
 
 export function getApiKeyById(id: number): ApiKeyRecord | undefined {
-  return prepareAndGet<ApiKeyRecord>('SELECT * FROM api_keys WHERE id = ?', [id]);
+  return prepareAndGet<ApiKeyRecord>(
+    'SELECT id, key, name, enabled, created_at, updated_at FROM api_keys WHERE id = ?',
+    [id],
+  );
 }
 
 export function getApiKeyByKey(key: string): ApiKeyRecord | undefined {
-  return prepareAndGet<ApiKeyRecord>('SELECT * FROM api_keys WHERE key = ?', [key]);
+  return prepareAndGet<ApiKeyRecord>(
+    'SELECT id, key, name, enabled, created_at, updated_at FROM api_keys WHERE key = ?',
+    [key],
+  );
 }
 
 export function generateKey(): string {
   return `sk-${crypto.randomBytes(24).toString('hex')}`;
 }
 
-export function createApiKey(name: string, apiKey?: string, cache?: boolean): ApiKeyRecord {
+export function createApiKey(name: string, apiKey?: string): ApiKeyRecord {
   const key = apiKey || generateKey();
-  prepareAndRun('INSERT INTO api_keys (key, name, cache) VALUES (?, ?, ?)', [key, name, cache ? 1 : 0]);
-  const row = prepareAndGet<ApiKeyRecord>('SELECT * FROM api_keys ORDER BY id DESC LIMIT 1');
+  prepareAndRun('INSERT INTO api_keys (key, name) VALUES (?, ?)', [key, name]);
+  const row = prepareAndGet<ApiKeyRecord>(
+    'SELECT id, key, name, enabled, created_at, updated_at FROM api_keys ORDER BY id DESC LIMIT 1',
+  );
   return row!;
 }
 
 export function updateApiKey(
   id: number,
-  data: Partial<Pick<ApiKeyRecord, 'name'> & { cache: boolean | number; enabled: boolean | number }>,
+  data: Partial<Pick<ApiKeyRecord, 'name'> & { enabled: boolean | number }>,
 ): void {
   const fields: string[] = [];
   const values: unknown[] = [];
   if (data.name !== undefined) {
     fields.push('name = ?');
     values.push(data.name);
-  }
-  if (data.cache !== undefined) {
-    fields.push('cache = ?');
-    values.push(data.cache ? 1 : 0);
   }
   if (data.enabled !== undefined) {
     fields.push('enabled = ?');

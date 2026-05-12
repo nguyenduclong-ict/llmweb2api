@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { AccountModal } from '../components/AccountModal';
 import { Plus, Pencil, Power, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface Account {
   id: number;
@@ -20,7 +21,6 @@ export default function Providers() {
   const [items, setItems] = useState<Account[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Account | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     loadItems();
@@ -40,19 +40,20 @@ export default function Providers() {
     setModalOpen(false);
     setEditingItem(null);
     await loadItems();
-    setToast('Account saved successfully');
-    setTimeout(() => setToast(null), 2000);
+    toast.success('Account saved successfully');
   }
 
   async function handleToggle(item: Account) {
     await apiPut(`/api/accounts/${item.id}`, { enabled: item.enabled ? 0 : 1 });
     await loadItems();
+    toast.success(item.enabled ? 'Account disabled' : 'Account enabled');
   }
 
   async function handleDelete(id: number) {
     if (confirm('Are you sure you want to delete this account?')) {
       await apiDelete(`/api/accounts/${id}`);
       await loadItems();
+      toast.success('Account deleted');
     }
   }
 
@@ -141,12 +142,6 @@ export default function Providers() {
       </Card>
 
       <AccountModal open={modalOpen} onOpenChange={setModalOpen} editingAccount={editingItem} onSave={handleSave} />
-
-      {toast && (
-        <div className="fixed bottom-4 right-4 rounded-lg bg-green-100 p-4 text-green-700 shadow-lg">
-          <p className="text-sm">{toast}</p>
-        </div>
-      )}
     </div>
   );
 }

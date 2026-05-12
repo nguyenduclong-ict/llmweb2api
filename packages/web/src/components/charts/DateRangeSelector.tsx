@@ -5,10 +5,11 @@ import type { DateRangePreset } from './dateRangeUtils';
 const PRESETS: { value: DateRangePreset; label: string }[] = [
   { value: 'today', label: 'Today' },
   { value: 'yesterday', label: 'Yesterday' },
-  { value: 'thisWeek', label: 'This Week' },
-  { value: 'thisMonth', label: 'This Month' },
+  { value: 'last3days', label: 'Last 3 Days' },
   { value: 'last7days', label: 'Last 7 Days' },
   { value: 'last30days', label: 'Last 30 Days' },
+  { value: 'thisWeek', label: 'This Week' },
+  { value: 'thisMonth', label: 'This Month' },
 ];
 
 interface DateRangeSelectorProps {

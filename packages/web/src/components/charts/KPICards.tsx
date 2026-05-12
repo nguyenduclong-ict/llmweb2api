@@ -42,7 +42,7 @@ interface Props {
   endDate?: string;
 }
 
-  const PLACEHOLDER_TITLES = ['Total Requests', 'P95 Latency', 'Error Rate', 'Tokens Used', 'TPS'];
+const PLACEHOLDER_TITLES = ['Total Requests', 'P95 Latency', 'Error Rate', 'Tokens Used', 'TPS'];
 
 export function KPICards({ startDate, endDate }: Props) {
   const [data, setData] = useState<KpiData | null>(null);

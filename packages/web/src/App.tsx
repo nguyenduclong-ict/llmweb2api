@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from 'sonner';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Providers from './pages/Providers';
 import ApiKeys from './pages/ApiKeys';
 import Analysis from './pages/Analysis';
+import Sessions from './pages/Sessions';
 import Logs from './pages/Logs';
 import Settings from './pages/Settings';
 
@@ -16,6 +18,7 @@ function ProtectedRoutes() {
         <Route path="/providers" element={<Providers />} />
         <Route path="/api-keys" element={<ApiKeys />} />
         <Route path="/analysis" element={<Analysis />} />
+        <Route path="/sessions" element={<Sessions />} />
         <Route path="/logs" element={<Logs />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
@@ -37,5 +40,10 @@ export default function App() {
     );
   }
 
-  return <ProtectedRoutes />;
+  return (
+    <>
+      <Toaster richColors position="top-right" />
+      <ProtectedRoutes />
+    </>
+  );
 }

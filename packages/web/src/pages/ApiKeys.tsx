@@ -5,12 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { ApiKeyModal } from '../components/ApiKeyModal';
 import { Plus, Pencil, Power, Trash2, Copy, Check } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface ApiKey {
   id: number;
   key: string;
   name: string;
-  cache: number;
   enabled: number;
   created_at: string;
 }
@@ -20,7 +20,6 @@ export default function ApiKeys() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     loadKeys();
@@ -35,24 +34,25 @@ export default function ApiKeys() {
     if (editingKey) {
       await apiPut(`/api/api-keys/${editingKey.id}`, data);
     } else {
-      return await apiPost<ApiKey>('/api/api-keys', data);
+      await apiPost<ApiKey>('/api/api-keys', data);
     }
     setModalOpen(false);
     setEditingKey(null);
     await loadKeys();
-    setToast('API key saved successfully');
-    setTimeout(() => setToast(null), 2000);
+    toast.success('API key saved');
   }
 
   async function handleToggle(item: ApiKey) {
     await apiPut(`/api/api-keys/${item.id}`, { enabled: item.enabled ? 0 : 1 });
     await loadKeys();
+    toast.success(item.enabled ? 'API key disabled' : 'API key enabled');
   }
 
   async function handleDelete(id: number) {
     if (confirm('Are you sure you want to delete this API key?')) {
       await apiDelete(`/api/api-keys/${id}`);
       await loadKeys();
+      toast.success('API key deleted');
     }
   }
 
@@ -67,15 +67,15 @@ export default function ApiKeys() {
   }
 
   function handleKeyGenerated(key: string) {
-    setCopiedId(-1);
     navigator.clipboard.writeText(key);
-    setTimeout(() => setCopiedId(null), 2000);
+    toast.success('API key copied to clipboard');
   }
 
   function copyKey(key: string, id: number) {
     navigator.clipboard.writeText(key);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
+    toast.success('Copied to clipboard');
   }
 
   return (
@@ -102,7 +102,6 @@ export default function ApiKeys() {
                 <TableHead>ID</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Key</TableHead>
-                <TableHead>Cache</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -123,7 +122,6 @@ export default function ApiKeys() {
                       </Button>
                     </div>
                   </TableCell>
-                  <TableCell>{k.cache ? 'Yes' : 'No'}</TableCell>
                   <TableCell>
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
@@ -149,7 +147,7 @@ export default function ApiKeys() {
               ))}
               {keys.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">
                     No API keys yet
                   </TableCell>
                 </TableRow>
@@ -166,18 +164,6 @@ export default function ApiKeys() {
         onSave={handleSave}
         onKeyGenerated={handleKeyGenerated}
       />
-
-      {copiedId === -1 && (
-        <div className="fixed bottom-4 right-4 rounded-lg bg-green-100 p-4 text-green-700 shadow-lg">
-          <p className="text-sm">API Key copied to clipboard!</p>
-        </div>
-      )}
-
-      {toast && (
-        <div className="fixed bottom-4 right-4 rounded-lg bg-green-100 p-4 text-green-700 shadow-lg">
-          <p className="text-sm">{toast}</p>
-        </div>
-      )}
     </div>
   );
 }
