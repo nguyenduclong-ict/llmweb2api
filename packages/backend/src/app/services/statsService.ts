@@ -400,6 +400,8 @@ export interface KPIResponse {
   errorRateChange: number;
   tokensUsed: number;
   tokensUsedChange: number;
+  tps: number;
+  tpsChange: number;
 }
 
 export function getKpiStats(startDate?: string, endDate?: string): KPIResponse {
@@ -421,29 +423,31 @@ export function getKpiStats(startDate?: string, endDate?: string): KPIResponse {
   const prevStartStr = fmt(prevStart);
   const prevEndStr = fmt(prevEnd) + 'T23:59:59';
 
-  const currentStats = prepareAndGet<{ requests: number; errors: number; p95: number; tokens: number }>(
+  const currentStats = prepareAndGet<{ requests: number; errors: number; p95: number; tokens: number; tps: number }>(
     `
     SELECT
       COUNT(*) AS requests,
       COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) AS errors,
       COALESCE(AVG(duration_ms), 0) AS p95,
-      COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
+      COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
+      CASE WHEN SUM(duration_ms) > 0 THEN CAST(SUM(output_tokens) AS REAL) / (SUM(duration_ms) / 1000.0) ELSE 0 END AS tps
     FROM request_logs WHERE created_at >= ? AND created_at <= ?
   `,
     [currentStart, currentEnd + (endDate ? '' : '')],
-  ) ?? { requests: 0, errors: 0, p95: 0, tokens: 0 };
+  ) ?? { requests: 0, errors: 0, p95: 0, tokens: 0, tps: 0 };
 
-  const prevStats = prepareAndGet<{ requests: number; errors: number; p95: number; tokens: number }>(
+  const prevStats = prepareAndGet<{ requests: number; errors: number; p95: number; tokens: number; tps: number }>(
     `
     SELECT
       COUNT(*) AS requests,
       COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) AS errors,
       COALESCE(AVG(duration_ms), 0) AS p95,
-      COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
+      COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
+      CASE WHEN SUM(duration_ms) > 0 THEN CAST(SUM(output_tokens) AS REAL) / (SUM(duration_ms) / 1000.0) ELSE 0 END AS tps
     FROM request_logs WHERE created_at >= ? AND created_at <= ?
   `,
     [prevStartStr, prevEndStr],
-  ) ?? { requests: 0, errors: 0, p95: 0, tokens: 0 };
+  ) ?? { requests: 0, errors: 0, p95: 0, tokens: 0, tps: 0 };
 
   const calcChange = (curr: number, prev: number): number => {
     if (prev === 0) return curr > 0 ? 100 : 0;
@@ -463,6 +467,8 @@ export function getKpiStats(startDate?: string, endDate?: string): KPIResponse {
     errorRateChange: Math.round((currentErrorRate - prevErrorRate) * 10) / 10,
     tokensUsed: currentStats.tokens,
     tokensUsedChange: calcChange(currentStats.tokens, prevStats.tokens),
+    tps: Math.round(currentStats.tps * 10) / 10,
+    tpsChange: calcChange(currentStats.tps, prevStats.tps),
   };
 }
 

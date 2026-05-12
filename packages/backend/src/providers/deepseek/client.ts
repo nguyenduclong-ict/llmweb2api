@@ -482,9 +482,10 @@ export async function* streamEditMessageLines(
   powResponse: string,
   payload: EditMessagePayload,
   signal?: AbortSignal,
+  options: { webHeaders?: boolean } = {},
 ): AsyncGenerator<string> {
   const headers = {
-    ...authHeaders(token),
+    ...(options.webHeaders ? webAuthHeaders(token) : authHeaders(token)),
     'x-ds-pow-response': powResponse,
   };
 

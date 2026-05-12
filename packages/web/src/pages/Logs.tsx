@@ -60,6 +60,7 @@ export default function Logs() {
                 <TableHead>Tokens In</TableHead>
                 <TableHead>Tokens Out</TableHead>
                 <TableHead>Duration</TableHead>
+                <TableHead>TPS</TableHead>
                 <TableHead>API Key</TableHead>
               </TableRow>
             </TableHeader>
@@ -84,6 +85,11 @@ export default function Logs() {
                   <TableCell>{log.input_tokens.toLocaleString()}</TableCell>
                   <TableCell>{log.output_tokens.toLocaleString()}</TableCell>
                   <TableCell>{log.duration_ms ? `${log.duration_ms}ms` : '-'}</TableCell>
+                  <TableCell>
+                    {log.duration_ms && log.duration_ms > 0
+                      ? (log.output_tokens / (log.duration_ms / 1000)).toFixed(1)
+                      : '-'}
+                  </TableCell>
                   <TableCell className="font-mono text-xs">
                     {log.api_key_id ? `${String(log.api_key_id).slice(0, 8)}...` : '-'}
                   </TableCell>
@@ -91,7 +97,7 @@ export default function Logs() {
               ))}
               {data.logs.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center text-muted-foreground">
+                  <TableCell colSpan={10} className="text-center text-muted-foreground">
                     No logs yet
                   </TableCell>
                 </TableRow>

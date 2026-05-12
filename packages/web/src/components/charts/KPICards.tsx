@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { apiGet } from '../../api/client';
-import { Activity, Clock, AlertTriangle, Coins, TrendingUp, TrendingDown } from 'lucide-react';
+import { Activity, Clock, AlertTriangle, Coins, Gauge, TrendingUp, TrendingDown } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 
 function formatNumber(num: number): string {
@@ -33,6 +33,8 @@ interface KpiData {
   errorRateChange: number;
   tokensUsed: number;
   tokensUsedChange: number;
+  tps: number;
+  tpsChange: number;
 }
 
 interface Props {
@@ -40,7 +42,7 @@ interface Props {
   endDate?: string;
 }
 
-const PLACEHOLDER_TITLES = ['Total Requests', 'P95 Latency', 'Error Rate', 'Tokens Used'];
+  const PLACEHOLDER_TITLES = ['Total Requests', 'P95 Latency', 'Error Rate', 'Tokens Used', 'TPS'];
 
 export function KPICards({ startDate, endDate }: Props) {
   const [data, setData] = useState<KpiData | null>(null);
@@ -57,7 +59,7 @@ export function KPICards({ startDate, endDate }: Props) {
 
   if (error || !data) {
     return (
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         {PLACEHOLDER_TITLES.map((title) => (
           <Card key={title}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -105,10 +107,18 @@ export function KPICards({ startDate, endDate }: Props) {
       trend: data.errorRateChange,
       inverted: true,
     },
+    {
+      title: 'TPS',
+      value: `${data.tps} tok/s`,
+      icon: Gauge,
+      color: 'text-cyan-500',
+      trend: data.tpsChange,
+      inverted: false,
+    },
   ];
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
       {cards.map((card) => (
         <Card key={card.title} className="hover:shadow-md transition-shadow">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

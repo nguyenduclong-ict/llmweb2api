@@ -119,7 +119,7 @@ class DeepSeekProvider implements Provider {
     let reasoning = '';
     let currentFragmentType: string | null = null;
     let gotMessageId = false;
-    for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload)) {
+    for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, undefined, { webHeaders: true })) {
       const raw = line.slice(5).trim();
       if (!raw) continue;
       try {
@@ -234,7 +234,7 @@ class DeepSeekProvider implements Provider {
       }
 
       try {
-        for await (const line of client.streamEditMessageLines(ctx.token, powResponse, editPayload, signal)) {
+        for await (const line of client.streamEditMessageLines(ctx.token, powResponse, editPayload, signal, { webHeaders: true })) {
           if (signal?.aborted) return;
           const raw = line.slice(5).trim();
           if (!raw) continue;
@@ -446,7 +446,7 @@ class DeepSeekProvider implements Provider {
     }
 
     try {
-      for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, signal)) {
+      for await (const line of client.streamCompletionLines(ctx.token, powResponse, payload, signal, { webHeaders: true })) {
         if (signal?.aborted) return;
         const raw = line.slice(5).trim();
         if (!raw) continue;
@@ -684,7 +684,7 @@ class DeepSeekProvider implements Provider {
         `[VISION] temp completion session=${tempSessionId.slice(0, 12)} promptLen=${prompt.length} refFiles=${refFileIds.length}`,
       );
 
-      for await (const line of client.streamCompletionLines(token, powResponse, payload, signal)) {
+      for await (const line of client.streamCompletionLines(token, powResponse, payload, signal, { webHeaders: true })) {
         if (signal?.aborted) break;
         const raw = line.slice(5).trim();
         if (!raw) continue;
