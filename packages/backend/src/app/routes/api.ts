@@ -41,7 +41,6 @@ function detachConversationWhenCacheDisabled(internalReq: InternalRequest, useCa
 
 apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Response) => {
   try {
-    console.log(`[API] ${req.method} ${req.originalUrl} called with headers:`, req.headers);
     const internalReq = openaiAdapter.parseRequest(req);
     const useCache = resolveUseCache(req, internalReq);
     detachConversationWhenCacheDisabled(internalReq, useCache);
@@ -112,7 +111,6 @@ apiRoutes.post('/v1/chat/completions', apiPipeline, async (req: Request, res: Re
 
 apiRoutes.post('/v1/responses', apiPipeline, async (req: Request, res: Response) => {
   try {
-    console.log(`[API] ${req.method} ${req.originalUrl} called with headers:`, req.headers);
     const internalReq = openaiResponsesAdapter.parseRequest(req);
     const useCache = resolveUseCache(req, internalReq);
     detachConversationWhenCacheDisabled(internalReq, useCache);

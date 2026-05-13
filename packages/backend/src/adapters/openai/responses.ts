@@ -10,7 +10,13 @@ import type {
 } from '../../types/common';
 import { resolveModel } from '../../app/services/modelService';
 import { getSessionId } from '../../app/lib/helpers';
-import { resolveThinking, countImageBlocks, countUnsupportedImageErrors, sseEvent } from './index';
+import {
+  resolveThinking,
+  countImageBlocks,
+  countUnsupportedImageErrors,
+  normalizeReasoningEffort,
+  sseEvent,
+} from './index';
 
 function extractResponsesContent(item: any): string | ContentBlock[] {
   if (typeof item === 'string') return item;
@@ -238,7 +244,10 @@ export const openaiResponsesAdapter: Adapter & {
       stop: body.stop,
       tools: normalizeResponsesTools(body.tools),
       toolChoice: body.tool_choice,
-      reasoningEffort: resolved.thinking ? 'high' : undefined,
+      reasoningEffort: resolved.thinking
+        ? normalizeReasoningEffort(body.reasoning?.effort ?? body.reasoning_effort) || 'medium'
+        : undefined,
+      thinking: resolved.thinking,
       conversationId,
       promptCacheKey: body.prompt_cache_key,
       reasoning: body.reasoning,

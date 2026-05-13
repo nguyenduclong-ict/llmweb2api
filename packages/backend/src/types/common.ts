@@ -72,6 +72,7 @@ export interface InternalRequest {
   tools?: unknown[];
   toolChoice?: unknown;
   reasoningEffort?: string;
+  thinking?: boolean;
   conversationId?: string;
   promptCacheKey?: string;
   thinkingLevel?: ThinkingLevel;
@@ -106,6 +107,7 @@ export interface InternalStreamChunk {
   usage?: {
     inputTokens: number;
     outputTokens: number;
+    reasoningTokens?: number;
     cumulativeInputTokens?: number;
     cumulativeOutputTokens?: number;
   };

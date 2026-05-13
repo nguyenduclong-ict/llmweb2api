@@ -89,6 +89,7 @@ export const geminiAdapter: Adapter = {
       topP: genConfig.topP,
       stop: genConfig.stopSequences,
       reasoningEffort: resolved.thinking ? 'high' : undefined,
+      thinking: resolved.thinking,
       conversationId: getSessionId(req) || body.conversation_id || undefined,
     };
   },

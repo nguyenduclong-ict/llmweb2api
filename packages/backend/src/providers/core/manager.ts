@@ -143,6 +143,7 @@ interface CachedConversation {
   toolsHash: string | null;
   lastMessageId: string | null;
   baseTrackedCount: number;
+  uploadedFileIds?: string[];
 }
 
 const conversationCache = new Map<string, CachedConversation>();
@@ -265,7 +266,10 @@ export async function dumpConversation(conversationId: string): Promise<void> {
   conversationCache.delete(conversationId);
 
   const entry = sessionStore.get(conversationId);
-  const sessionsToDispose = new Map<string, { providerName: string; providerSessionId: string; accountId: number }>();
+  const sessionsToDispose = new Map<
+    string,
+    { providerName: string; providerSessionId: string; accountId: number; uploadedFileIds: string[] }
+  >();
 
   for (const record of records) {
     if (!record.provider || !record.account_id) continue;
@@ -276,6 +280,9 @@ export async function dumpConversation(conversationId: string): Promise<void> {
       providerName: record.provider,
       providerSessionId,
       accountId: record.account_id,
+      uploadedFileIds: Array.isArray(metadata.uploadedFileIds)
+        ? metadata.uploadedFileIds.filter((id): id is string => typeof id === 'string')
+        : [],
     });
   }
 
@@ -284,6 +291,7 @@ export async function dumpConversation(conversationId: string): Promise<void> {
       providerName: state.providerName,
       providerSessionId: state.providerSessionId,
       accountId: state.accountId,
+      uploadedFileIds: state.uploadedFileIds ?? [],
     });
   }
 
@@ -292,6 +300,7 @@ export async function dumpConversation(conversationId: string): Promise<void> {
       providerName: entry.providerName,
       providerSessionId: entry.providerSessionId,
       accountId: entry.accountId,
+      uploadedFileIds: [],
     });
   }
 
@@ -311,7 +320,11 @@ export async function dumpConversation(conversationId: string): Promise<void> {
         accountId: item.id,
         token,
         sessionId: sessionToDispose.providerSessionId,
-        metadata: {},
+        metadata: {
+          accountSettings: settings,
+          accountSession: session,
+          uploadedFileIds: sessionToDispose.uploadedFileIds,
+        },
       });
       console.log(
         `[CONV] Deleted ${sessionToDispose.providerName} session ${sessionToDispose.providerSessionId} for ${conversationId}`,
@@ -382,7 +395,12 @@ async function ensureToken(providerName: string, account: AccountSelection): Pro
 
 async function createSession(provider: Provider, account: AccountSelection): Promise<SessionContext> {
   const token = await ensureToken(provider.name, account);
-  const ctx = await provider.createSession({ accountId: account.itemId, token, sessionId: '', metadata: {} });
+  const ctx = await provider.createSession({
+    accountId: account.itemId,
+    token,
+    sessionId: '',
+    metadata: { accountSettings: account.settings, accountSession: account.session },
+  });
   console.log(`[CONV] New provider conversation created: ${ctx.sessionId}`);
   return ctx;
 }
@@ -405,7 +423,7 @@ async function buildSessionContext(
     accountId,
     token,
     sessionId: entry?.providerSessionId || providerSessionId,
-    metadata: { parentMessageId: entry?.parentMessageId },
+    metadata: { parentMessageId: entry?.parentMessageId, accountSettings: settings, accountSession: session },
   };
 }
 
@@ -540,6 +558,9 @@ function createStateFromContext(
     toolsHash: hashTools(request.tools as unknown[] | undefined),
     lastMessageId,
     baseTrackedCount: 0,
+    uploadedFileIds: Array.isArray(ctx.metadata.uploadedFileIds)
+      ? (ctx.metadata.uploadedFileIds as unknown[]).filter((id): id is string => typeof id === 'string')
+      : [],
   };
 }
 
@@ -554,6 +575,9 @@ function persistStateFromContext(
   saved.accountId = state.accountId;
   saved.providerSessionId = state.providerSessionId;
   saved.baseTrackedCount = state.baseTrackedCount;
+  saved.uploadedFileIds = [...(state.uploadedFileIds ?? []), ...(saved.uploadedFileIds ?? [])].filter(
+    (id, index, arr) => arr.indexOf(id) === index,
+  );
   if (!saved.lastMessageId) saved.lastMessageId = state.lastMessageId;
   saveState(saved, request.promptCacheKey, response);
   return saved;
@@ -575,7 +599,11 @@ function saveState(state: CachedConversation, promptCacheKey?: string, response?
       seq: state.seq,
       accountId: state.accountId,
       providerName: state.providerName,
-      metadata: { providerSessionId: state.providerSessionId, baseTrackedCount: state.baseTrackedCount },
+      metadata: {
+        providerSessionId: state.providerSessionId,
+        baseTrackedCount: state.baseTrackedCount,
+        uploadedFileIds: state.uploadedFileIds ?? [],
+      },
       trackedCount: state.trackedCount,
       trackedHash: state.trackedHash,
       toolsHash: state.toolsHash,
@@ -592,7 +620,11 @@ function saveState(state: CachedConversation, promptCacheKey?: string, response?
     seq: state.seq,
     accountId: state.accountId,
     providerName: state.providerName,
-    metadata: { providerSessionId: state.providerSessionId, baseTrackedCount: state.baseTrackedCount },
+    metadata: {
+      providerSessionId: state.providerSessionId,
+      baseTrackedCount: state.baseTrackedCount,
+      uploadedFileIds: state.uploadedFileIds ?? [],
+    },
     trackedCount: state.trackedCount,
     trackedHash: state.trackedHash,
     toolsHash: state.toolsHash,
@@ -630,6 +662,9 @@ function loadState(conversationId: string): CachedConversation | undefined {
     toolsHash: row.tools_hash || null,
     lastMessageId: row.last_message_id ?? null,
     baseTrackedCount,
+    uploadedFileIds: Array.isArray(metadata.uploadedFileIds)
+      ? metadata.uploadedFileIds.filter((id): id is string => typeof id === 'string')
+      : [],
   };
   conversationCache.set(conversationId, state);
   saveSession(

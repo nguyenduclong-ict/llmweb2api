@@ -16,18 +16,30 @@ export function resolveThinking(body: any): { thinking?: boolean; thinkingLevel?
   if (thinkingType === 'disabled') return { thinking: false };
 
   if (thinkingType === 'enabled') {
-    const effort = body?.reasoning_effort as string | undefined;
+    const effort = normalizeReasoningEffort(body?.reasoning_effort ?? body?.reasoning?.effort);
     if (effort === 'low') return { thinking: true, thinkingLevel: 'Fast' };
-    if (effort === 'medium' || effort === 'high') return { thinking: true, thinkingLevel: 'Thinking' };
+    if (effort === 'medium' || effort === 'high' || effort === 'extra_high')
+      return { thinking: true, thinkingLevel: 'Thinking' };
     return { thinking: true, thinkingLevel: 'Auto' };
   }
 
-  const effort = body?.reasoning_effort as string | undefined;
-  if (effort === 'low' || effort === 'medium' || effort === 'high') {
+  const effort = normalizeReasoningEffort(body?.reasoning_effort ?? body?.reasoning?.effort);
+  if (effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'extra_high') {
     return { thinking: true, thinkingLevel: 'Auto' };
   }
 
   return {};
+}
+
+export function normalizeReasoningEffort(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const effort = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (effort === 'extra_high' || effort === 'xhigh') return 'extra_high';
+  if (effort === 'low' || effort === 'medium' || effort === 'high') return effort;
+  return undefined;
 }
 
 function extractContent(message: any): string | ContentBlock[] {
@@ -123,7 +135,8 @@ export const openaiAdapter: Adapter = {
       stop: body.stop,
       tools: body.tools,
       toolChoice: body.tool_choice,
-      reasoningEffort: resolved.thinking ? 'high' : undefined,
+      reasoningEffort: resolved.thinking ? normalizeReasoningEffort(body.reasoning_effort) || 'medium' : undefined,
+      thinking: resolved.thinking,
       conversationId,
       thinkingLevel: resolved.thinkingLevel,
     };

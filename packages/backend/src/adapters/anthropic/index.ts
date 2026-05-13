@@ -77,6 +77,7 @@ export const anthropicAdapter: Adapter = {
       topP: body.top_p,
       stop: body.stop_sequences,
       reasoningEffort: resolved.thinking ? 'high' : undefined,
+      thinking: resolved.thinking,
       conversationId: getSessionId(req) || body.conversation_id || undefined,
     };
   },

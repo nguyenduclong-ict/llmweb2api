@@ -7,6 +7,10 @@ import {
   getProviderModelMeta as getQwenModelMeta,
   getAllProviderModels as getAllQwenModels,
 } from '../../providers/qwen/models';
+import {
+  getProviderModelMeta as getChatGptModelMeta,
+  getAllProviderModels as getAllChatGptModels,
+} from '../../providers/chatgpt/models';
 import type { ProviderModelMeta } from '../../providers/deepseek/models';
 import type { ResolvedModel, ThinkingLevel } from '../../types/common';
 
@@ -98,7 +102,7 @@ export function resolveModel(
     const matchKey = Object.keys(map).find((k) => k.toLowerCase() === lowerModel);
     if (matchKey) {
       providerModel = map[matchKey];
-    } else if (getDeepSeekModelMeta(vendorModel) || getQwenModelMeta(vendorModel)) {
+    } else if (getDeepSeekModelMeta(vendorModel) || getQwenModelMeta(vendorModel) || getChatGptModelMeta(vendorModel)) {
       providerModel = vendorModel;
     } else {
       providerModel = 'deepseek-v4-flash';
@@ -106,13 +110,17 @@ export function resolveModel(
   }
 
   const meta: ProviderModelMeta = getDeepSeekModelMeta(providerModel) ??
-    getQwenModelMeta(providerModel) ?? {
+    getQwenModelMeta(providerModel) ??
+    getChatGptModelMeta(providerModel) ?? {
       thinking: 'off',
       search: false,
       modelType: 'default',
     };
 
   let thinking = meta.thinking === 'on' || meta.thinking === 'toggleable';
+  if (isChatGptProviderModel(providerModel) && meta.thinking === 'toggleable' && thinkingOverride === undefined) {
+    thinking = false;
+  }
   if (meta.thinking === 'toggleable' && thinkingOverride === false) {
     thinking = false;
   }
@@ -133,13 +141,17 @@ export function resolveModel(
 
 function resolveProviderName(providerModel: string): string {
   if (providerModel.startsWith('deepseek-')) return 'deepseek';
-  if (providerModel.startsWith('gpt-')) return 'chatgpt';
+  if (isChatGptProviderModel(providerModel)) return 'chatgpt';
   if (providerModel.startsWith('qwen')) return 'qwen';
   return 'deepseek';
 }
 
+function isChatGptProviderModel(providerModel: string): boolean {
+  return !!getChatGptModelMeta(providerModel);
+}
+
 export function getAvailableProviderModels(): string[] {
-  return [...getAllDeepSeekModels(), ...getAllQwenModels()];
+  return [...getAllDeepSeekModels(), ...getAllQwenModels(), ...getAllChatGptModels()];
 }
 
 export function getDefaultMaps(): Record<AdapterName, ModelMap> {
