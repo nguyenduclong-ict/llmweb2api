@@ -698,8 +698,9 @@ class DeepSeekProvider implements Provider {
     const imageRefs = extractImageRefs(messages as Array<{ role: string; content: unknown }>);
     const imageFileIds = imageRefs.length > 0 ? await uploadImageRefs(token, imageRefs) : [];
     const unsupportedImageErrors = countUnsupportedImageErrors(messages);
+    const modelType = getModelType(request.providerModel || request.model);
     console.log(
-      `[DEEPSEEK] media: modelType=${getModelType(request.providerModel || request.model)} imageRefs=${imageRefs.length} ` +
+      `[DEEPSEEK] media: modelType=${modelType} imageRefs=${imageRefs.length} ` +
         `uploadedImages=${imageFileIds.length} unsupportedImageErrors=${unsupportedImageErrors}`,
     );
 
@@ -751,15 +752,19 @@ class DeepSeekProvider implements Provider {
     // Upload tool system prompt as file if present
     let toolFileInstruction = '';
     if (toolsFileContent) {
-      const toolFilename = `${this.name}_tools_${Date.now()}.txt`;
-      const uploadResult = await client.uploadFile(token, toolFilename, toolsFileContent);
-      this.uploadedFileIds.push(uploadResult.id);
-      fileIds.push(uploadResult.id);
-      await client.pollFileReady(token, uploadResult.id);
-      toolFileInstruction = block(
-        'system',
-        `Please read the attached file (${toolFilename}) to understand the context.`,
-      );
+      if (modelType === 'expert') {
+        toolFileInstruction = toolsFileContent;
+      } else {
+        const toolFilename = `${this.name}_tools_${Date.now()}.txt`;
+        const uploadResult = await client.uploadFile(token, toolFilename, toolsFileContent);
+        this.uploadedFileIds.push(uploadResult.id);
+        fileIds.push(uploadResult.id);
+        await client.pollFileReady(token, uploadResult.id);
+        toolFileInstruction = block(
+          'system',
+          `Please read the attached file (${toolFilename}) to understand the context.`,
+        );
+      }
     }
 
     // Inject todo reminder if needed
@@ -777,7 +782,7 @@ class DeepSeekProvider implements Provider {
     // Build full prompt with message content only (tool prompt moved to file)
     const fullPrompt = [toolFileInstruction, messageXml, todoReminder].filter(Boolean).join('\n\n');
 
-    if (fullPrompt.length >= FILE_UPLOAD_THRESHOLD) {
+    if (fullPrompt.length >= FILE_UPLOAD_THRESHOLD && modelType !== 'expert') {
       console.log(
         `[DEEPSEEK] prompt size=${fullPrompt.length} >= threshold=${FILE_UPLOAD_THRESHOLD}, uploading message blocks as file`,
       );
@@ -811,7 +816,11 @@ class DeepSeekProvider implements Provider {
       ];
       prompt = fileParts.filter(Boolean).join('\n\n');
     } else {
-      console.log(`[DEEPSEEK] prompt size=${fullPrompt.length} < threshold=${FILE_UPLOAD_THRESHOLD}, inline`);
+      console.log(
+        `[DEEPSEEK] prompt size=${fullPrompt.length} ${
+          fullPrompt.length >= FILE_UPLOAD_THRESHOLD ? '>=' : '<'
+        } threshold=${FILE_UPLOAD_THRESHOLD}, inline`,
+      );
       prompt = fullPrompt;
     }
     console.log(`[DEEPSEEK] buildPromptAndFiles took ${Date.now() - t0}ms`);

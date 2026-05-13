@@ -118,7 +118,7 @@ export function resolveModel(
     };
 
   let thinking = meta.thinking === 'on' || meta.thinking === 'toggleable';
-  if (isChatGptProviderModel(providerModel) && meta.thinking === 'toggleable' && thinkingOverride === undefined) {
+  if (meta.thinking === 'toggleable' && thinkingOverride === undefined && isChatGptProviderModel(providerModel)) {
     thinking = false;
   }
   if (meta.thinking === 'toggleable' && thinkingOverride === false) {

@@ -16,6 +16,7 @@ interface Account {
 }
 
 const PROVIDER_TYPES = ['deepseek', 'chatgpt', 'qwen'];
+const TOKEN_PROVIDERS = new Set(['chatgpt', 'qwen']);
 
 interface AccountModalFormProps {
   editingAccount: Account | null;
@@ -28,7 +29,7 @@ export function AccountModalForm({ editingAccount, onSave, onCancel }: AccountMo
   const [provider, setProvider] = useState(editingAccount ? editingAccount.provider : 'deepseek');
   const [settings, setSettings] = useState(() => {
     if (!editingAccount) return '{}';
-    if (editingAccount.provider === 'deepseek' || editingAccount.provider === 'qwen') return '{}';
+    if (editingAccount.provider === 'deepseek' || TOKEN_PROVIDERS.has(editingAccount.provider)) return '{}';
     return editingAccount.settings;
   });
   const [email, setEmail] = useState(() => {
@@ -48,7 +49,7 @@ export function AccountModalForm({ editingAccount, onSave, onCancel }: AccountMo
     }
   });
   const [token, setToken] = useState(() => {
-    if (!editingAccount || editingAccount.provider !== 'qwen') return '';
+    if (!editingAccount || !TOKEN_PROVIDERS.has(editingAccount.provider)) return '';
     try {
       return JSON.parse(editingAccount.settings).token || '';
     } catch {
@@ -80,7 +81,7 @@ export function AccountModalForm({ editingAccount, onSave, onCancel }: AccountMo
         return;
       }
       settingsData = { type: 'email+password', email: email.trim(), password };
-    } else if (provider === 'qwen') {
+    } else if (TOKEN_PROVIDERS.has(provider)) {
       if (!token.trim()) {
         setError('Token is required');
         return;
@@ -131,9 +132,9 @@ export function AccountModalForm({ editingAccount, onSave, onCancel }: AccountMo
               <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
           </>
-        ) : provider === 'qwen' ? (
+        ) : TOKEN_PROVIDERS.has(provider) ? (
           <div className="grid gap-2">
-            <Label htmlFor="token">Token (JWT from cookie)</Label>
+            <Label htmlFor="token">{provider === 'chatgpt' ? 'Access Token' : 'Token (JWT from cookie)'}</Label>
             <Input id="token" value={token} onChange={(e) => setToken(e.target.value)} placeholder="eyJhbGciOi..." />
           </div>
         ) : (
