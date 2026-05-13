@@ -158,6 +158,7 @@ interface CachedConversation {
 interface ForkPreparation {
   providerRequest: InternalRequest;
   stateRequest: InternalRequest;
+  baseTrackedCount?: number;
 }
 
 const conversationCache = new Map<string, CachedConversation>();
@@ -180,7 +181,14 @@ export async function processChatWithCache(
 
   if (!state) {
     const prepared = await prepareMissingStateRequest(providerName, request);
-    return startNewChat(providerName, prepared.providerRequest, publicConversationId, 0, 0, prepared.stateRequest);
+    return startNewChat(
+      providerName,
+      prepared.providerRequest,
+      publicConversationId,
+      0,
+      prepared.baseTrackedCount ?? 0,
+      prepared.stateRequest,
+    );
   }
 
   const toolsHash = hashTools(request.tools as unknown[] | undefined);
@@ -245,7 +253,7 @@ export async function processChatStreamWithCache(
       prepared.providerRequest,
       publicConversationId,
       0,
-      0,
+      prepared.baseTrackedCount ?? 0,
       signal,
       prepared.stateRequest,
     );
@@ -613,6 +621,7 @@ async function prepareMissingStateRequest(
   return {
     providerRequest: buildSummaryContinuationRequest(request, summary, tail),
     stateRequest: request,
+    baseTrackedCount: filterTrackedMessages(request.messages).length,
   };
 }
 
