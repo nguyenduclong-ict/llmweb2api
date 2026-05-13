@@ -770,7 +770,8 @@ class DeepSeekProvider implements Provider {
     // Inject todo reminder if needed
     let todoReminder = '';
     if (!isNewConversation) {
-      const snapshot = shouldInjectTodoReminder(messages as InternalMessage[]);
+      const reminderMessages = request.originalMessages ?? messages;
+      const snapshot = shouldInjectTodoReminder(reminderMessages as InternalMessage[]);
       if (snapshot) {
         todoReminder = buildTodoReminderBlock(snapshot);
         console.log(

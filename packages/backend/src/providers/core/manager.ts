@@ -192,7 +192,11 @@ export async function processChatWithCache(
   ctx.metadata.parentMessageId = state.lastMessageId ?? undefined;
   ctx.metadata.conversationId = publicConversationId;
 
-  const response = await provider.chat(ctx, { ...request, messages: decision.messagesToSend });
+  const response = await provider.chat(ctx, {
+    ...request,
+    messages: decision.messagesToSend,
+    originalMessages: request.messages,
+  });
   const saved = persistStateFromContext(state, providerName, request, ctx, response);
 
   return {
@@ -243,7 +247,11 @@ export async function processChatStreamWithCache(
   ctx.metadata.parentMessageId = activeState.lastMessageId ?? undefined;
   ctx.metadata.conversationId = publicConversationId;
 
-  const innerStream = provider.chatStream(ctx, { ...request, messages: decision.messagesToSend }, signal);
+  const innerStream = provider.chatStream(
+    ctx,
+    { ...request, messages: decision.messagesToSend, originalMessages: request.messages },
+    signal,
+  );
   const accountId = activeState.accountId;
   let hasMeaningfulChunk = false;
 

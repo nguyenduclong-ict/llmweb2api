@@ -64,6 +64,7 @@ export interface InternalRequest {
   providerModel?: string;
   providerName: string;
   messages: InternalMessage[];
+  originalMessages?: InternalMessage[];
   stream: boolean;
   maxTokens?: number;
   temperature?: number;
