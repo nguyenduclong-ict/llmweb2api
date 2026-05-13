@@ -245,15 +245,24 @@ export async function processChatStreamWithCache(
 
   const innerStream = provider.chatStream(ctx, { ...request, messages: decision.messagesToSend }, signal);
   const accountId = activeState.accountId;
+  let hasMeaningfulChunk = false;
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
     try {
       for await (const chunk of innerStream) {
         if (signal?.aborted) return;
+        if (isMeaningfulChunk(chunk)) hasMeaningfulChunk = true;
         yield chunk;
       }
     } finally {
-      persistStateFromContext(activeState, providerName, request, ctx);
+      if (hasMeaningfulChunk) {
+        persistStateFromContext(activeState, providerName, request, ctx);
+      } else {
+        console.warn(
+          `[CONV] skip persisting empty stream for ${activeState.conversationId}; ` +
+            `provider=${providerName} session=${ctx.sessionId}`,
+        );
+      }
     }
   }
 
@@ -466,17 +475,25 @@ async function startNewChatStream(
   saveSession(conversationId, ctx.sessionId, providerName, account.itemId, undefined, seq);
 
   const innerStream = provider.chatStream(ctx, request, signal);
+  let hasMeaningfulChunk = false;
 
   async function* wrappedStream(): AsyncGenerator<InternalStreamChunk> {
     try {
       for await (const chunk of innerStream) {
         if (signal?.aborted) return;
+        if (isMeaningfulChunk(chunk)) hasMeaningfulChunk = true;
         yield chunk;
       }
     } finally {
-      const state = createStateFromContext(conversationId, seq, providerName, request, ctx);
-      state.baseTrackedCount = baseTrackedCount;
-      saveState(state, request.promptCacheKey);
+      if (hasMeaningfulChunk) {
+        const state = createStateFromContext(conversationId, seq, providerName, request, ctx);
+        state.baseTrackedCount = baseTrackedCount;
+        saveState(state, request.promptCacheKey);
+      } else {
+        console.warn(
+          `[CONV] skip saving empty new stream for ${conversationId}; provider=${providerName} session=${ctx.sessionId}`,
+        );
+      }
     }
   }
 
@@ -631,6 +648,15 @@ function saveState(state: CachedConversation, promptCacheKey?: string, response?
     lastMessageId: state.lastMessageId,
     promptCacheKey,
   });
+}
+
+function isMeaningfulChunk(chunk: InternalStreamChunk): boolean {
+  return !!(
+    chunk.content ||
+    chunk.reasoningContent ||
+    chunk.toolCallDelta ||
+    (chunk.toolCalls && chunk.toolCalls.length > 0)
+  );
 }
 
 function getLatestState(conversationId: string): CachedConversation | undefined {
