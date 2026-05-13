@@ -3,7 +3,7 @@ import type { Provider, SessionContext } from '../../types/provider';
 import type { InternalMessage, InternalRequest, InternalResponse, InternalStreamChunk } from '../../types/common';
 import * as client from './client';
 import type { DeepSeekCompletionPayload } from './types';
-import { FILE_UPLOAD_THRESHOLD } from './types';
+import { FILE_UPLOAD_THRESHOLD } from './constants';
 import { getModelType } from './models';
 import { hashMessage } from '../core/hash';
 import { TOOL_SYSTEM_PROMPT, buildToolPrompt, block, toolBlock } from '../core/tool_prompt';

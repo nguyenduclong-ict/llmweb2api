@@ -10,10 +10,9 @@ import type {
 } from '../../types/common';
 import * as client from './client';
 import { toChatGptUpstreamModel } from './models';
+import { FILE_UPLOAD_THRESHOLD } from './constants';
 import { TOOL_SYSTEM_PROMPT, block, buildToolPrompt, toolBlock } from '../core/tool_prompt';
 import { ToolSieve } from '../core/tool_sieve';
-
-const FILE_UPLOAD_THRESHOLD = 100 * 1024;
 
 interface ChatGptSessionMetadata extends Record<string, unknown> {
   accountMeta?: client.ChatGptAccountMeta;

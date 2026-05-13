@@ -1,5 +1,6 @@
 import type { DeepSeekPowChallenge, DeepSeekCompletionPayload, DeepSeekUploadResult } from './types';
-import { DEEPSEEK_URLS, BASE_HEADERS, MAX_FILE_SIZE } from './types';
+import { MAX_FILE_SIZE } from './constants';
+import { DEEPSEEK_URLS, BASE_HEADERS } from './types';
 import axios from 'axios';
 import {
   initPowWasm,

@@ -88,10 +88,6 @@ export const DEEPSEEK_URLS = {
   uploadTarget: '/api/v0/file/upload_file',
 };
 
-export const FILE_UPLOAD_THRESHOLD = 100 * 1024;
-export const MAX_FILE_SIZE = 10 * 1024 * 1024;
-export const MAX_FILES = 50;
-
 export const BASE_HEADERS: Record<string, string> = {
   Host: DEEPSEEK_HOST,
   Accept: 'application/json',

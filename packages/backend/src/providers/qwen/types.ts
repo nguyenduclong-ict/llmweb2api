@@ -6,8 +6,6 @@ export const QWEN_API_URLS = {
   chatCompletionsStop: `${QWEN_BASE_URL}/api/v2/chat/completions/stop`,
 };
 
-export const FILE_UPLOAD_THRESHOLD = 100 * 1024;
-
 export const BAXIA_VERSION = '2.5.36';
 
 export const CACHE_TTL = 4 * 60 * 1000;

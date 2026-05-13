@@ -3,7 +3,7 @@ import type { Provider, SessionContext } from '../../types/provider';
 import type { InternalMessage, InternalRequest, InternalResponse, InternalStreamChunk } from '../../types/common';
 import * as client from './client';
 import type { QwenFilePayload } from './types';
-import { FILE_UPLOAD_THRESHOLD } from './types';
+import { FILE_UPLOAD_THRESHOLD } from './constants';
 import { TOOL_SYSTEM_PROMPT, buildToolPrompt, block, toolBlock } from '../core/tool_prompt';
 import { parseToolCallXML } from '../core/tool_parser';
 import { ToolSieve } from '../core/tool_sieve';

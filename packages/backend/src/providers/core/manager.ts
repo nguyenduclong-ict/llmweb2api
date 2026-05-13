@@ -5,6 +5,14 @@ import * as conversationModel from '../../app/models/conversation';
 import { getSetting } from '../../app/services/settingsService';
 import { filterTrackedMessages, hashMessages, hashTools } from './hash';
 import { getModelType as getDeepSeekModelType } from '../deepseek/models';
+import {
+  DEFAULT_CONTEXT_HYDRATION_CHUNK_TOKENS,
+  DEFAULT_CONTEXT_HYDRATION_PROMPT_OVERHEAD_CHARS,
+  DEFAULT_CONTEXT_HYDRATION_STEP_DELAY_MS,
+  DEFAULT_CONVERSATION_SUMMARY_MAX_CHARS,
+  DEFAULT_EXPERT_INLINE_PROMPT_BUDGET_CHARS,
+  HYDRATION_REMEMBER_PROMPT,
+} from '../deepseek/constants';
 
 const providerRegistry = new Map<string, Provider>();
 
@@ -644,6 +652,7 @@ async function hydrateAndSummarize(
     for (let i = 0; i < chunks.length; i++) {
       if (signal?.aborted) throw new Error('Request aborted during hydration');
       await sendHydrationChunk(provider, ctx, request, chunks[i], i + 1, chunks.length, signal);
+      await sleep(getHydrationStepDelayMs());
     }
     return summarizeCurrentConversation(provider, ctx, request, signal);
   } finally {
@@ -660,44 +669,38 @@ async function sendHydrationChunk(
   total: number,
   signal?: AbortSignal,
 ): Promise<void> {
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  signal?.addEventListener('abort', onAbort, { once: true });
+  const stream = provider.chatStream(
+    ctx,
+    {
+      ...request,
+      messages: [
+        {
+          role: 'user',
+          content:
+            `${HYDRATION_REMEMBER_PROMPT}\n\n` +
+            `<context_chunk index="${index}" total="${total}">\n${chunk}\n</context_chunk>`,
+        },
+      ],
+      originalMessages: request.messages,
+      tools: undefined,
+      toolChoice: undefined,
+      stream: true,
+    },
+    signal,
+  );
 
-  try {
-    const stream = provider.chatStream(
-      ctx,
-      {
-        ...request,
-        messages: [
-          {
-            role: 'user',
-            content:
-              `Store this conversation-history chunk ${index}/${total} as context for a later summary. ` +
-              `Do not answer the original user yet.\n\n${chunk}`,
-          },
-        ],
-        originalMessages: request.messages,
-        tools: undefined,
-        toolChoice: undefined,
-        stream: true,
-      },
-      controller.signal,
-    );
-
-    for await (const unused of stream) {
-      void unused;
-      controller.abort();
-      break;
-    }
-
-    if (ctx.metadata.lastResponseMessageId) {
-      ctx.metadata.parentMessageId = String(ctx.metadata.lastResponseMessageId);
-    }
-    console.log(`[CONV] hydrated chunk ${index}/${total} session=${ctx.sessionId.slice(0, 12)}`);
-  } finally {
-    signal?.removeEventListener('abort', onAbort);
+  let outputChars = 0;
+  for await (const streamChunk of stream) {
+    if (signal?.aborted) throw new Error('Request aborted during hydration chunk');
+    outputChars += (streamChunk.content || '').length + (streamChunk.reasoningContent || '').length;
   }
+
+  if (ctx.metadata.lastResponseMessageId) {
+    ctx.metadata.parentMessageId = String(ctx.metadata.lastResponseMessageId);
+  }
+  console.log(
+    `[CONV] hydrated chunk ${index}/${total} session=${ctx.sessionId.slice(0, 12)} outputChars=${outputChars}`,
+  );
 }
 
 function buildSummaryContinuationRequest(
@@ -801,22 +804,44 @@ function clampText(text: string, maxChars: number): string {
 }
 
 function getInlinePromptBudgetChars(): number {
-  const raw = getSetting('expert_inline_prompt_budget_chars', String(100 * 1024))?.trim();
+  const raw = getSetting(
+    'expert_inline_prompt_budget_chars',
+    String(DEFAULT_EXPERT_INLINE_PROMPT_BUDGET_CHARS),
+  )?.trim();
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 100 * 1024;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_EXPERT_INLINE_PROMPT_BUDGET_CHARS;
 }
 
 function getHydrationChunkChars(): number {
-  const rawTokens = getSetting('context_hydration_chunk_tokens', '30000')?.trim();
-  const parsedTokens = Number(rawTokens);
-  const tokens = Number.isFinite(parsedTokens) && parsedTokens > 0 ? Math.floor(parsedTokens) : 30000;
-  return tokens * 4;
+  const rawChars = getSetting('context_hydration_chunk_chars', '')?.trim();
+  const parsedChars = Number(rawChars);
+  const requestedChars =
+    Number.isFinite(parsedChars) && parsedChars > 0
+      ? Math.floor(parsedChars)
+      : Math.floor(
+          Number(
+            getSetting('context_hydration_chunk_tokens', String(DEFAULT_CONTEXT_HYDRATION_CHUNK_TOKENS)) ||
+              String(DEFAULT_CONTEXT_HYDRATION_CHUNK_TOKENS),
+          ) * 4,
+        );
+  const inlineBudget = getInlinePromptBudgetChars();
+  return Math.max(1, Math.min(requestedChars, inlineBudget - DEFAULT_CONTEXT_HYDRATION_PROMPT_OVERHEAD_CHARS));
+}
+
+function getHydrationStepDelayMs(): number {
+  const raw = getSetting('context_hydration_step_delay_ms', String(DEFAULT_CONTEXT_HYDRATION_STEP_DELAY_MS))?.trim();
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : DEFAULT_CONTEXT_HYDRATION_STEP_DELAY_MS;
 }
 
 function getSummaryMaxChars(): number {
-  const raw = getSetting('conversation_summary_max_chars', '16000')?.trim();
+  const raw = getSetting('conversation_summary_max_chars', String(DEFAULT_CONVERSATION_SUMMARY_MAX_CHARS))?.trim();
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 16000;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_CONVERSATION_SUMMARY_MAX_CHARS;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const SUMMARY_PROMPT =

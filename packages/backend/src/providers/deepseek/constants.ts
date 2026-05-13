@@ -1,0 +1,11 @@
+export const FILE_UPLOAD_THRESHOLD = 100 * 1024;
+export const MAX_FILE_SIZE = 10 * 1024 * 1024;
+export const MAX_FILES = 50;
+
+export const DEFAULT_EXPERT_INLINE_PROMPT_BUDGET_CHARS = 100 * 1024;
+export const DEFAULT_CONTEXT_HYDRATION_CHUNK_TOKENS = 12500;
+export const DEFAULT_CONTEXT_HYDRATION_PROMPT_OVERHEAD_CHARS = 12 * 1024;
+export const DEFAULT_CONTEXT_HYDRATION_STEP_DELAY_MS = 1000;
+export const DEFAULT_CONVERSATION_SUMMARY_MAX_CHARS = 16000;
+
+export const HYDRATION_REMEMBER_PROMPT = '*** remember this contents, just reply me i remembered ***';

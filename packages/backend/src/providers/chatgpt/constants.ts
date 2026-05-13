@@ -1,0 +1,1 @@
+export const FILE_UPLOAD_THRESHOLD = 100 * 1024;
