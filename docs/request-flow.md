@@ -1,5 +1,14 @@
 # Request Flow
 
+## Provider Limitations
+
+### DeepSeek expert models
+
+- `deepseek-v4-pro` uses `modelType=expert`.
+- DeepSeek expert mode currently does not allow file upload attachments.
+- Do not use the large-prompt file-upload fallback for `modelType=expert`; the prompt must stay inline or be reduced before calling `/api/v0/chat/completion`.
+- This matters during conversation rollover (`max_messages_per_conversation`): replaying a long history into a new expert session can create a very large inline prompt and may return an empty stream with `finish_reason=stop`.
+
 ## Tổng quan
 
 Backend hỗ trợ nhiều provider (DeepSeek, Qwen, ChatGPT) và nhiều adapter (OpenAI, Anthropic, Gemini). Mỗi request được route dựa trên adapter type, chuyển đổi sang `InternalRequest`, sau đó xử lý bởi core manager.

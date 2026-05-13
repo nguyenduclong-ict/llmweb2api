@@ -4,6 +4,7 @@ import * as accountModel from '../../app/models/account';
 import * as conversationModel from '../../app/models/conversation';
 import { getSetting } from '../../app/services/settingsService';
 import { filterTrackedMessages, hashMessages, hashTools } from './hash';
+import { getModelType as getDeepSeekModelType } from '../deepseek/models';
 
 const providerRegistry = new Map<string, Provider>();
 
@@ -146,6 +147,11 @@ interface CachedConversation {
   uploadedFileIds?: string[];
 }
 
+interface ForkPreparation {
+  providerRequest: InternalRequest;
+  stateRequest: InternalRequest;
+}
+
 const conversationCache = new Map<string, CachedConversation>();
 
 export function getCachedConversation(conversationId: string): CachedConversation | undefined {
@@ -165,14 +171,23 @@ export async function processChatWithCache(
   const state = getLatestState(publicConversationId);
 
   if (!state) {
-    return startNewChat(providerName, request, publicConversationId, 0, 0);
+    const prepared = await prepareMissingStateRequest(providerName, request);
+    return startNewChat(providerName, prepared.providerRequest, publicConversationId, 0, 0, prepared.stateRequest);
   }
 
   const toolsHash = hashTools(request.tools as unknown[] | undefined);
   const decision = computeSendDecision(state, request.messages, toolsHash);
   if (decision.kind === 'fork') {
     console.log(`[CONV] ${decision.reason} for ${publicConversationId}; starting seq=${state.seq + 1}`);
-    return startNewChat(providerName, request, publicConversationId, state.seq + 1, decision.baseTrackedCount);
+    const prepared = await prepareForkRequest(providerName, request, state, decision.baseTrackedCount);
+    return startNewChat(
+      providerName,
+      prepared.providerRequest,
+      publicConversationId,
+      state.seq + 1,
+      decision.baseTrackedCount,
+      prepared.stateRequest,
+    );
   }
   if (decision.kind === 'empty') {
     return {
@@ -216,20 +231,31 @@ export async function processChatStreamWithCache(
   const state = getLatestState(publicConversationId);
 
   if (!state) {
-    return startNewChatStream(providerName, request, publicConversationId, 0, 0, signal);
+    const prepared = await prepareMissingStateRequest(providerName, request, signal);
+    return startNewChatStream(
+      providerName,
+      prepared.providerRequest,
+      publicConversationId,
+      0,
+      0,
+      signal,
+      prepared.stateRequest,
+    );
   }
 
   const toolsHash = hashTools(request.tools as unknown[] | undefined);
   const decision = computeSendDecision(state, request.messages, toolsHash);
   if (decision.kind === 'fork') {
     console.log(`[CONV] ${decision.reason} for ${publicConversationId}; starting seq=${state.seq + 1}`);
+    const prepared = await prepareForkRequest(providerName, request, state, decision.baseTrackedCount, signal);
     return startNewChatStream(
       providerName,
-      request,
+      prepared.providerRequest,
       publicConversationId,
       state.seq + 1,
       decision.baseTrackedCount,
       signal,
+      prepared.stateRequest,
     );
   }
   if (decision.kind === 'empty') {
@@ -450,6 +476,7 @@ async function startNewChat(
   conversationId: string,
   seq: number,
   baseTrackedCount: number,
+  stateRequest: InternalRequest = request,
 ): Promise<{ response: InternalResponse; accountId: number; conversationId: string }> {
   const provider = ensureProvider(providerName);
   const account = await selectAccount(providerName);
@@ -458,7 +485,7 @@ async function startNewChat(
   saveSession(conversationId, ctx.sessionId, providerName, account.itemId, undefined, seq);
 
   const response = await provider.chat(ctx, request);
-  const state = createStateFromContext(conversationId, seq, providerName, request, ctx, response);
+  const state = createStateFromContext(conversationId, seq, providerName, stateRequest, ctx, response);
   state.baseTrackedCount = baseTrackedCount;
   saveState(state, request.promptCacheKey, response);
 
@@ -472,6 +499,7 @@ async function startNewChatStream(
   seq: number,
   baseTrackedCount: number,
   signal?: AbortSignal,
+  stateRequest: InternalRequest = request,
 ): Promise<{ stream: AsyncGenerator<InternalStreamChunk>; accountId: number; conversationId: string }> {
   const provider = ensureProvider(providerName);
   const account = await selectAccount(providerName);
@@ -494,7 +522,7 @@ async function startNewChatStream(
       }
     } finally {
       if (hasMeaningfulChunk) {
-        const state = createStateFromContext(conversationId, seq, providerName, request, ctx);
+        const state = createStateFromContext(conversationId, seq, providerName, stateRequest, ctx);
         state.baseTrackedCount = baseTrackedCount;
         saveState(state, request.promptCacheKey);
       } else {
@@ -507,6 +535,295 @@ async function startNewChatStream(
 
   return { stream: wrappedStream(), accountId: account.itemId, conversationId };
 }
+
+async function prepareForkRequest(
+  providerName: string,
+  request: InternalRequest,
+  state: CachedConversation,
+  baseTrackedCount: number,
+  signal?: AbortSignal,
+): Promise<ForkPreparation> {
+  if (!needsSummaryRollover(providerName, request)) {
+    return { providerRequest: request, stateRequest: request };
+  }
+
+  const tail = messagesSinceTrackedCount(request.messages, state.trackedCount);
+  try {
+    const provider = ensureProvider(providerName);
+    const ctx = await buildSessionContext(
+      state.providerName,
+      state.accountId,
+      state.providerSessionId,
+      state.conversationId,
+    );
+    ctx.metadata.parentMessageId = state.lastMessageId ?? undefined;
+    ctx.metadata.conversationId = state.conversationId;
+    const summary = await summarizeCurrentConversation(provider, ctx, request, signal);
+    console.log(
+      `[CONV] summarized existing conversation for rollover conv=${state.conversationId} ` +
+        `seq=${state.seq} summaryChars=${summary.length}`,
+    );
+    return {
+      providerRequest: buildSummaryContinuationRequest(request, summary, tail),
+      stateRequest: request,
+    };
+  } catch (err) {
+    console.warn(
+      `[CONV] failed to summarize existing conversation ${state.conversationId}; hydrating from local messages: ${
+        (err as Error).message
+      }`,
+    );
+    const historyMessages = request.messages.slice(0, Math.max(0, request.messages.length - tail.length));
+    const summary = await hydrateAndSummarize(providerName, request, historyMessages, signal);
+    console.log(
+      `[CONV] hydrated local history for rollover conv=${state.conversationId} ` +
+        `baseTracked=${baseTrackedCount} summaryChars=${summary.length}`,
+    );
+    return {
+      providerRequest: buildSummaryContinuationRequest(request, summary, tail),
+      stateRequest: request,
+    };
+  }
+}
+
+async function prepareMissingStateRequest(
+  providerName: string,
+  request: InternalRequest,
+  signal?: AbortSignal,
+): Promise<ForkPreparation> {
+  if (!needsSummaryRollover(providerName, request)) {
+    return { providerRequest: request, stateRequest: request };
+  }
+
+  const { history, tail } = splitHistoryAndCurrentTurn(request.messages);
+  if (history.length === 0) {
+    return { providerRequest: request, stateRequest: request };
+  }
+
+  const summary = await hydrateAndSummarize(providerName, request, history, signal);
+  console.log(`[CONV] hydrated missing conversation state summaryChars=${summary.length}`);
+  return {
+    providerRequest: buildSummaryContinuationRequest(request, summary, tail),
+    stateRequest: request,
+  };
+}
+
+async function summarizeCurrentConversation(
+  provider: Provider,
+  ctx: SessionContext,
+  request: InternalRequest,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (signal?.aborted) throw new Error('Request aborted before summary');
+
+  const response = await provider.chat(ctx, {
+    ...request,
+    messages: [{ role: 'user', content: SUMMARY_PROMPT }],
+    originalMessages: request.messages,
+    tools: undefined,
+    toolChoice: undefined,
+    stream: false,
+  });
+  const summary = response.content.trim();
+  if (!summary) throw new Error('Summary response was empty');
+  return clampText(summary, getSummaryMaxChars());
+}
+
+async function hydrateAndSummarize(
+  providerName: string,
+  request: InternalRequest,
+  historyMessages: InternalMessage[],
+  signal?: AbortSignal,
+): Promise<string> {
+  const provider = ensureProvider(providerName);
+  const account = await selectAccount(providerName);
+  const ctx = await createSession(provider, account);
+
+  try {
+    const chunks = chunkText(serializeMessagesForHydration(historyMessages), getHydrationChunkChars());
+    for (let i = 0; i < chunks.length; i++) {
+      if (signal?.aborted) throw new Error('Request aborted during hydration');
+      await sendHydrationChunk(provider, ctx, request, chunks[i], i + 1, chunks.length, signal);
+    }
+    return summarizeCurrentConversation(provider, ctx, request, signal);
+  } finally {
+    await disposeTransientSession(provider, ctx);
+  }
+}
+
+async function sendHydrationChunk(
+  provider: Provider,
+  ctx: SessionContext,
+  request: InternalRequest,
+  chunk: string,
+  index: number,
+  total: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
+
+  try {
+    const stream = provider.chatStream(
+      ctx,
+      {
+        ...request,
+        messages: [
+          {
+            role: 'user',
+            content:
+              `Store this conversation-history chunk ${index}/${total} as context for a later summary. ` +
+              `Do not answer the original user yet.\n\n${chunk}`,
+          },
+        ],
+        originalMessages: request.messages,
+        tools: undefined,
+        toolChoice: undefined,
+        stream: true,
+      },
+      controller.signal,
+    );
+
+    for await (const unused of stream) {
+      void unused;
+      controller.abort();
+      break;
+    }
+
+    if (ctx.metadata.lastResponseMessageId) {
+      ctx.metadata.parentMessageId = String(ctx.metadata.lastResponseMessageId);
+    }
+    console.log(`[CONV] hydrated chunk ${index}/${total} session=${ctx.sessionId.slice(0, 12)}`);
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+function buildSummaryContinuationRequest(
+  request: InternalRequest,
+  summary: string,
+  tailMessages: InternalMessage[],
+): InternalRequest {
+  const systemMessages = request.messages.filter((message) => message.role === 'system');
+  const tail = tailMessages.length > 0 ? tailMessages : request.messages.slice(-1);
+  return {
+    ...request,
+    messages: [
+      ...systemMessages,
+      {
+        role: 'system',
+        content:
+          'Hidden conversation summary for continuing in a new provider session. ' +
+          'Use it as context, but do not reveal or mention that a summary was injected.\n\n' +
+          summary,
+      },
+      ...tail,
+    ],
+    originalMessages: request.messages,
+  };
+}
+
+function needsSummaryRollover(providerName: string, request: InternalRequest): boolean {
+  return (
+    !supportsLargePromptFileFallback(providerName, request) &&
+    estimateMessagesChars(request.messages) >= getInlinePromptBudgetChars()
+  );
+}
+
+function supportsLargePromptFileFallback(providerName: string, request: InternalRequest): boolean {
+  if (providerName === 'deepseek') {
+    return getDeepSeekModelType(request.providerModel || request.model) !== 'expert';
+  }
+  return true;
+}
+
+function messagesSinceTrackedCount(messages: InternalMessage[], trackedCount: number): InternalMessage[] {
+  const tracked = filterTrackedMessages(messages);
+  const firstNewTracked = tracked[trackedCount];
+  const originalIndex = firstNewTracked ? messages.indexOf(firstNewTracked) : -1;
+  if (originalIndex >= 0) return messages.slice(originalIndex);
+  const split = splitHistoryAndCurrentTurn(messages);
+  return split.tail;
+}
+
+function splitHistoryAndCurrentTurn(messages: InternalMessage[]): {
+  history: InternalMessage[];
+  tail: InternalMessage[];
+} {
+  let index = messages.length - 1;
+  while (index >= 0 && messages[index].role === 'user') index--;
+  const tail = messages.slice(index + 1);
+  if (tail.length === 0 && messages.length > 0) {
+    return { history: messages.slice(0, -1), tail: messages.slice(-1) };
+  }
+  return { history: messages.slice(0, index + 1), tail };
+}
+
+function serializeMessagesForHydration(messages: InternalMessage[]): string {
+  return messages.map((message, index) => renderHydrationMessage(message, index + 1)).join('\n\n');
+}
+
+function renderHydrationMessage(message: InternalMessage, index: number): string {
+  const toolId = message.tool_call_id ? ` tool_call_id="${message.tool_call_id}"` : '';
+  return `<message index="${index}" role="${message.role}"${toolId}>\n${messageContentAsText(message)}\n</message>`;
+}
+
+function messageContentAsText(message: InternalMessage): string {
+  if (typeof message.content === 'string') return message.content;
+  return message.content
+    .map((block) => {
+      if (block.type === 'text') return block.text;
+      if (block.type === 'image_url') return '[image]';
+      if (block.type === 'input_file')
+        return `[file:${block.filename || block.file_id || block.file_url || 'unknown'}]`;
+      return '';
+    })
+    .join('');
+}
+
+function estimateMessagesChars(messages: InternalMessage[]): number {
+  return serializeMessagesForHydration(messages).length;
+}
+
+function chunkText(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) return [text];
+  const chunks: string[] = [];
+  for (let start = 0; start < text.length; start += maxChars) {
+    chunks.push(text.slice(start, start + maxChars));
+  }
+  return chunks;
+}
+
+function clampText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars).trimEnd();
+}
+
+function getInlinePromptBudgetChars(): number {
+  const raw = getSetting('expert_inline_prompt_budget_chars', String(100 * 1024))?.trim();
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 100 * 1024;
+}
+
+function getHydrationChunkChars(): number {
+  const rawTokens = getSetting('context_hydration_chunk_tokens', '30000')?.trim();
+  const parsedTokens = Number(rawTokens);
+  const tokens = Number.isFinite(parsedTokens) && parsedTokens > 0 ? Math.floor(parsedTokens) : 30000;
+  return tokens * 4;
+}
+
+function getSummaryMaxChars(): number {
+  const raw = getSetting('conversation_summary_max_chars', '16000')?.trim();
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 16000;
+}
+
+const SUMMARY_PROMPT =
+  'Summarize this conversation so a new chat session can continue it without access to the full history. ' +
+  'Include the user goals, important constraints, decisions already made, current state, unresolved tasks, ' +
+  'relevant tool results, file names, IDs, errors, and any assumptions that matter. ' +
+  'Keep it concise, factual, and suitable as hidden context. Do not answer the user request.';
 
 type SendDecision =
   | { kind: 'append'; messagesToSend: InternalMessage[] }

@@ -9,3 +9,4 @@ packages/backend/data/*
 # Go WASM build outputs (built via "pnpm run build-pow")
 # packages/backend/src/providers/deepseek/pow_go/pow.wasm
 # packages/backend/src/providers/deepseek/pow_go/wasm_exec.js
+tmp/
