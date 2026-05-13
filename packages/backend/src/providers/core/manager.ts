@@ -654,7 +654,7 @@ async function hydrateAndSummarize(
       await sendHydrationChunk(provider, ctx, request, chunks[i], i + 1, chunks.length, signal);
       await sleep(getHydrationStepDelayMs());
     }
-    return summarizeCurrentConversation(provider, ctx, request, signal);
+    return await summarizeCurrentConversation(provider, ctx, request, signal);
   } finally {
     await disposeTransientSession(provider, ctx);
   }
