@@ -7,6 +7,7 @@ import { registerProvider } from './providers/core/manager';
 import { deepseekProvider } from './providers/deepseek';
 import { chatgptProvider } from './providers/chatgpt';
 import { qwenProvider } from './providers/qwen';
+import { zaiProvider } from './providers/zai';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -23,6 +24,9 @@ async function main(): Promise<void> {
 
   registerProvider(qwenProvider);
   console.log('[PROVIDER] Registered: qwen');
+
+  registerProvider(zaiProvider);
+  console.log('[PROVIDER] Registered: zai');
 
   const app = createServer();
 

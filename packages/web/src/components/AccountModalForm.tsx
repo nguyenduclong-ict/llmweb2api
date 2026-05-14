@@ -15,8 +15,8 @@ interface Account {
   created_at: string;
 }
 
-const PROVIDER_TYPES = ['deepseek', 'chatgpt', 'qwen'];
-const TOKEN_PROVIDERS = new Set(['chatgpt', 'qwen']);
+const PROVIDER_TYPES = ['deepseek', 'chatgpt', 'qwen', 'zai'];
+const TOKEN_PROVIDERS = new Set(['chatgpt', 'qwen', 'zai']);
 
 interface AccountModalFormProps {
   editingAccount: Account | null;
@@ -56,6 +56,14 @@ export function AccountModalForm({ editingAccount, onSave, onCancel }: AccountMo
       return '';
     }
   });
+  const [captchaVerifyParam, setCaptchaVerifyParam] = useState(() => {
+    if (!editingAccount || editingAccount.provider !== 'zai') return '';
+    try {
+      return JSON.parse(editingAccount.settings).captchaVerifyParam || '';
+    } catch {
+      return '';
+    }
+  });
   const [error, setError] = useState('');
 
   const handleProviderChange = (value: string) => {
@@ -63,6 +71,7 @@ export function AccountModalForm({ editingAccount, onSave, onCancel }: AccountMo
     setEmail('');
     setPassword('');
     setToken('');
+    setCaptchaVerifyParam('');
     setSettings('{}');
     setError('');
   };
@@ -86,7 +95,10 @@ export function AccountModalForm({ editingAccount, onSave, onCancel }: AccountMo
         setError('Token is required');
         return;
       }
-      settingsData = { token: token.trim() };
+      settingsData = {
+        token: token.trim(),
+        ...(provider === 'zai' && captchaVerifyParam.trim() ? { captchaVerifyParam: captchaVerifyParam.trim() } : {}),
+      };
     } else {
       try {
         settingsData = JSON.parse(settings);
@@ -133,10 +145,22 @@ export function AccountModalForm({ editingAccount, onSave, onCancel }: AccountMo
             </div>
           </>
         ) : TOKEN_PROVIDERS.has(provider) ? (
-          <div className="grid gap-2">
-            <Label htmlFor="token">{provider === 'chatgpt' ? 'Access Token' : 'Token (JWT from cookie)'}</Label>
-            <Input id="token" value={token} onChange={(e) => setToken(e.target.value)} placeholder="eyJhbGciOi..." />
-          </div>
+          <>
+            <div className="grid gap-2">
+              <Label htmlFor="token">{provider === 'chatgpt' ? 'Access Token' : 'Token (JWT from cookie)'}</Label>
+              <Input id="token" value={token} onChange={(e) => setToken(e.target.value)} placeholder="eyJhbGciOi..." />
+            </div>
+            {provider === 'zai' && (
+              <div className="grid gap-2">
+                <Label htmlFor="captchaVerifyParam">Captcha Verify Param (optional)</Label>
+                <Input
+                  id="captchaVerifyParam"
+                  value={captchaVerifyParam}
+                  onChange={(e) => setCaptchaVerifyParam(e.target.value)}
+                />
+              </div>
+            )}
+          </>
         ) : (
           <div className="grid gap-2">
             <Label htmlFor="settings">Settings (JSON)</Label>

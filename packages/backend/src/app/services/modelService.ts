@@ -11,6 +11,11 @@ import {
   getProviderModelMeta as getChatGptModelMeta,
   getAllProviderModels as getAllChatGptModels,
 } from '../../providers/chatgpt/models';
+import {
+  getProviderModelMeta as getZaiModelMeta,
+  getAllProviderModels as getAllZaiModels,
+  isZaiProviderModel,
+} from '../../providers/zai/models';
 import type { ProviderModelMeta } from '../../providers/deepseek/models';
 import type { ResolvedModel, ThinkingLevel } from '../../types/common';
 
@@ -102,7 +107,12 @@ export function resolveModel(
     const matchKey = Object.keys(map).find((k) => k.toLowerCase() === lowerModel);
     if (matchKey) {
       providerModel = map[matchKey];
-    } else if (getDeepSeekModelMeta(vendorModel) || getQwenModelMeta(vendorModel) || getChatGptModelMeta(vendorModel)) {
+    } else if (
+      getDeepSeekModelMeta(vendorModel) ||
+      getQwenModelMeta(vendorModel) ||
+      getChatGptModelMeta(vendorModel) ||
+      getZaiModelMeta(vendorModel)
+    ) {
       providerModel = vendorModel;
     } else {
       providerModel = 'deepseek-v4-flash';
@@ -111,7 +121,8 @@ export function resolveModel(
 
   const meta: ProviderModelMeta = getDeepSeekModelMeta(providerModel) ??
     getQwenModelMeta(providerModel) ??
-    getChatGptModelMeta(providerModel) ?? {
+    getChatGptModelMeta(providerModel) ??
+    getZaiModelMeta(providerModel) ?? {
       thinking: 'off',
       search: false,
       modelType: 'default',
@@ -142,6 +153,7 @@ export function resolveModel(
 function resolveProviderName(providerModel: string): string {
   if (providerModel.startsWith('deepseek-')) return 'deepseek';
   if (isChatGptProviderModel(providerModel)) return 'chatgpt';
+  if (isZaiProviderModel(providerModel)) return 'zai';
   if (providerModel.startsWith('qwen')) return 'qwen';
   return 'deepseek';
 }
@@ -151,7 +163,7 @@ function isChatGptProviderModel(providerModel: string): boolean {
 }
 
 export function getAvailableProviderModels(): string[] {
-  return [...getAllDeepSeekModels(), ...getAllQwenModels(), ...getAllChatGptModels()];
+  return [...getAllDeepSeekModels(), ...getAllQwenModels(), ...getAllChatGptModels(), ...getAllZaiModels()];
 }
 
 export function getDefaultMaps(): Record<AdapterName, ModelMap> {
